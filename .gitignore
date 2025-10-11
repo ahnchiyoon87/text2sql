@@ -1,0 +1,136 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Neo4j
+neo4j_data/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node.js / Vue3 Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Frontend build outputs
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# Frontend cache
+.npm/
+.eslintcache
+.vite/
+.cache/
+*.tsbuildinfo
+
+# Frontend testing
+coverage/
+.nyc_output/
+
+# Java / Maven
+*.class
+target/
+.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.properties
+!.mvn/wrapper/MavenWrapperDownloader.java
+
+# Gateway static assets (frontend build outputs)
+gateway/src/main/resources/static/
+
+# Java build artifacts
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Java IDE specific
+*.iml
+*.ipr
+*.iws
+.idea/
+.settings/
+.classpath
+.project
+.factorypath
+
+# Gradle
+.gradle/
+build/
+!gradle-wrapper.jar
+
+# Compiled class file
+hs_err_pid*
+replay_pid*

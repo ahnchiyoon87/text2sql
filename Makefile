@@ -1,0 +1,111 @@
+.PHONY: help install start neo4j stop clean test lint format
+
+help:
+	@echo "Neo4j Text2SQL - Available commands:"
+	@echo "  make install    - Install dependencies with uv"
+	@echo "  make neo4j      - Start Neo4j container"
+	@echo "  make init       - Initialize Neo4j schema"
+	@echo "  make start      - Start API server"
+	@echo "  make stop       - Stop all services"
+	@echo "  make clean      - Clean up containers and volumes"
+	@echo "  make test       - Run tests"
+	@echo "  make lint       - Run linter"
+	@echo "  make ingest     - Run schema ingestion (requires running API)"
+
+install:
+	uv sync
+
+neo4j:
+	docker-compose up -d
+	@echo "Waiting for Neo4j to be ready..."
+	@sleep 10
+	@echo "✓ Neo4j is running at http://localhost:7474"
+
+init: neo4j
+	uv run python scripts/init_schema.py
+
+start:
+	uv run python main.py
+
+stop:
+	docker-compose down
+
+clean:
+	docker-compose down -v
+	rm -rf .venv __pycache__ **/__pycache__
+
+test:
+	uv run pytest tests/ -v
+
+lint:
+	uv run ruff check app/
+
+format:
+	uv run ruff format app/
+
+ingest:
+	@echo "Make sure API is running first!"
+	curl -X POST "http://localhost:8000/ingest" \
+		-H "Content-Type: application/json" \
+		-d '{"db_name": "postgres", "schema": "public", "clear_existing": true}'
+
+health:
+	curl http://localhost:8000/health | jq .
+
+# Quick setup for first time
+setup: install neo4j init
+	@echo ""
+	@echo "✅ Setup complete!"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Edit .env file with your configuration"
+	@echo "  2. Run 'make start' to start the API"
+	@echo "  3. Run 'make ingest' to load your schema"
+	@echo "  4. Visit http://localhost:8000/docs"
+
+# Test with Docker Compose PostgreSQL
+test-setup:
+	@echo "Setting up test environment..."
+	@if [ ! -f .env ]; then \
+		cp env.test.example .env; \
+		echo "✓ Created .env from env.test.example"; \
+		echo "⚠️  Please edit .env and add your OPENAI_API_KEY"; \
+	else \
+		echo "⚠️  .env already exists, skipping..."; \
+	fi
+	$(MAKE) setup
+	@echo ""
+	@echo "🧪 Test environment ready!"
+	@echo ""
+	@echo "PostgreSQL test database:"
+	@echo "  - Host: localhost:5432"
+	@echo "  - Database: testdb"
+	@echo "  - User: readonly / Password: readonly123"
+	@echo ""
+	@echo "Sample data includes:"
+	@echo "  - 8 categories"
+	@echo "  - 50 products"
+	@echo "  - 30 customers"
+	@echo "  - 30 orders with items"
+	@echo "  - 50 reviews"
+
+test-db:
+	@echo "Testing PostgreSQL connection..."
+	docker exec -it postgres_text2sql psql -U testuser -d testdb -c "SELECT 'PostgreSQL is ready!' AS status;"
+	@echo ""
+	@echo "Sample queries:"
+	@echo "  docker exec -it postgres_text2sql psql -U testuser -d testdb"
+
+test-query:
+	@echo "Running sample test queries..."
+	@echo ""
+	@echo "1. Simple query - List customers"
+	curl -s -X POST "http://localhost:8000/ask" \
+		-H "Content-Type: application/json" \
+		-d '{"question": "고객 목록 5명만 보여줘", "limit": 5}' | jq '.table.rows'
+	@echo ""
+	@echo "2. Aggregation - Category sales"
+	curl -s -X POST "http://localhost:8000/ask" \
+		-H "Content-Type: application/json" \
+		-d '{"question": "카테고리별 상품 수", "limit": 10}' | jq '.table'
+

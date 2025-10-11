@@ -1,0 +1,172 @@
+"""Main /ask endpoint for natural language to SQL"""
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional
+import time
+
+from app.deps import get_neo4j_session, get_db_connection, get_openai_client
+from app.core.embedding import EmbeddingClient
+from app.core.graph_search import GraphSearcher, format_subschema_for_prompt
+from app.core.prompt import SQLChain
+from app.core.sql_guard import SQLGuard, SQLValidationError
+from app.core.sql_exec import SQLExecutor, SQLExecutionError
+from app.core.viz import VizRecommender
+
+
+router = APIRouter(prefix="/ask", tags=["Query"])
+
+
+class AskRequest(BaseModel):
+    """Request model for /ask endpoint"""
+    question: str = Field(..., description="Natural language question")
+    db_key: str = Field(default="default", description="Database identifier")
+    visual_pref: Optional[List[str]] = Field(default=None, description="Preferred chart types")
+    limit: Optional[int] = Field(default=1000, description="Row limit")
+    include_explain: bool = Field(default=False, description="Include query execution plan")
+
+
+class ProvenanceInfo(BaseModel):
+    """Provenance information about how the query was generated"""
+    tables: List[str]
+    columns: List[str]
+    neo4j_paths: List[str]
+    vector_matches: List[Dict[str, Any]]
+    prompt_snapshot_id: str
+
+
+class PerformanceMetrics(BaseModel):
+    """Performance metrics for the request"""
+    embedding_ms: float
+    graph_search_ms: float
+    llm_ms: float
+    sql_ms: float
+    total_ms: float
+
+
+class AskResponse(BaseModel):
+    """Response model for /ask endpoint"""
+    sql: str
+    table: Dict[str, Any]
+    charts: List[Dict[str, Any]]
+    provenance: ProvenanceInfo
+    perf: PerformanceMetrics
+    warnings: Optional[List[str]] = None
+
+
+@router.post("", response_model=AskResponse)
+async def ask_question(
+    request: AskRequest,
+    neo4j_session=Depends(get_neo4j_session),
+    db_conn=Depends(get_db_connection),
+    openai_client=Depends(get_openai_client)
+):
+    """
+    Convert natural language question to SQL, execute it, and return results with visualizations.
+    """
+    warnings = []
+    total_start = time.time()
+    
+    try:
+        # 1. Generate query embedding
+        embed_start = time.time()
+        embedding_client = EmbeddingClient(openai_client)
+        query_embedding = await embedding_client.embed_text(request.question)
+        embedding_ms = (time.time() - embed_start) * 1000
+        
+        # 2. Search Neo4j graph for relevant schema
+        graph_start = time.time()
+        searcher = GraphSearcher(neo4j_session)
+        subschema = await searcher.build_subschema(query_embedding)
+        graph_search_ms = (time.time() - graph_start) * 1000
+        
+        if not subschema.tables:
+            raise HTTPException(
+                status_code=404,
+                detail="No relevant tables found for your question. Please rephrase or check schema ingestion."
+            )
+        
+        # 3. Generate SQL using LLM
+        llm_start = time.time()
+        schema_text = format_subschema_for_prompt(subschema)
+        join_hints = "\n".join(subschema.join_hints) if subschema.join_hints else "No specific join hints."
+        
+        sql_chain = SQLChain()
+        generated_sql = await sql_chain.generate_sql(
+            question=request.question,
+            schema_text=schema_text,
+            join_hints=join_hints
+        )
+        llm_ms = (time.time() - llm_start) * 1000
+        
+        # 4. Validate SQL
+        sql_guard = SQLGuard()
+        allowed_tables = [t.name for t in subschema.tables]
+        
+        try:
+            validated_sql, _ = sql_guard.validate(generated_sql, allowed_tables=allowed_tables)
+        except SQLValidationError as e:
+            raise HTTPException(status_code=400, detail=f"SQL validation failed: {str(e)}")
+        
+        # 5. Execute SQL
+        sql_start = time.time()
+        executor = SQLExecutor()
+        
+        try:
+            results = await executor.execute_query(db_conn, validated_sql)
+        except SQLExecutionError as e:
+            raise HTTPException(status_code=500, detail=f"SQL execution failed: {str(e)}")
+        
+        sql_ms = (time.time() - sql_start) * 1000
+        
+        # 6. Generate visualizations
+        viz_recommender = VizRecommender()
+        charts = viz_recommender.recommend_charts(
+            columns=results["columns"],
+            rows=results["rows"]
+        )
+        
+        # Apply visual preferences if provided
+        if request.visual_pref:
+            charts = [c for c in charts if c.get("type") in request.visual_pref] or charts
+        
+        # 7. Build provenance
+        prompt_snapshot_id = f"ps_{int(time.time())}_{hash(request.question) % 10000}"
+        
+        provenance = ProvenanceInfo(
+            tables=[f"{t.schema}.{t.name}" for t in subschema.tables],
+            columns=[f"{c.table_name}.{c.name}" for c in subschema.columns[:10]],
+            neo4j_paths=[f"{fk['from_table']} -> {fk['to_table']}" for fk in subschema.fk_relationships],
+            vector_matches=[
+                {"node": f"Table:{t.name}", "score": round(t.score, 3)}
+                for t in subschema.tables[:5]
+            ],
+            prompt_snapshot_id=prompt_snapshot_id
+        )
+        
+        # 8. Build performance metrics
+        total_ms = (time.time() - total_start) * 1000
+        perf = PerformanceMetrics(
+            embedding_ms=round(embedding_ms, 2),
+            graph_search_ms=round(graph_search_ms, 2),
+            llm_ms=round(llm_ms, 2),
+            sql_ms=round(sql_ms, 2),
+            total_ms=round(total_ms, 2)
+        )
+        
+        # Format results for JSON
+        table_data = executor.format_results_for_json(results)
+        
+        return AskResponse(
+            sql=validated_sql,
+            table=table_data,
+            charts=charts,
+            provenance=provenance,
+            perf=perf,
+            warnings=warnings if warnings else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+

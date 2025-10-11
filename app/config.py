@@ -1,0 +1,54 @@
+"""Application configuration"""
+from pydantic_settings import BaseSettings
+from typing import Literal
+
+
+class Settings(BaseSettings):
+    """Application settings from environment variables"""
+    
+    # Neo4j
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "password123"
+    
+    # OpenAI
+    openai_api_key: str
+    openai_embedding_model: str = "text-embedding-3-large"
+    openai_llm_model: str = "gpt-4o-mini"
+    
+    # Target Database
+    target_db_type: Literal["postgresql", "mysql", "oracle"] = "postgresql"
+    target_db_host: str = "localhost"
+    target_db_port: int = 5432
+    target_db_name: str
+    target_db_user: str
+    target_db_password: str
+    target_db_schema: str = "public"
+    
+    # API
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    api_workers: int = 1
+    
+    # Security & Limits
+    sql_timeout_seconds: int = 30
+    sql_row_limit: int = 1000
+    sql_max_rows: int = 100000
+    max_join_depth: int = 3
+    max_subquery_depth: int = 3
+    
+    # RAG
+    vector_top_k: int = 10
+    max_fk_hops: int = 3
+    embedding_dimension: int = 1536
+    
+    # Logging
+    log_level: str = "INFO"
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
+
+
+settings = Settings()
+
