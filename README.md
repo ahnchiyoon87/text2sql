@@ -111,7 +111,7 @@ curl -X POST "http://localhost:8000/ingest" \
   -d '{
     "db_name": "postgres",
     "schema": "public",
-    "clear_existing": true
+    "clear_existing": false
   }'
 ```
 
