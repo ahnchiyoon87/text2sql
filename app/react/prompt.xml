@@ -22,65 +22,68 @@
 
 		<instruction id="2" name="Output Structure">
 			<description>You must respond in the following XML structure:</description>
+			<critical_requirement>ALWAYS wrap your entire response with a root &lt;output&gt; tag. This is MANDATORY for proper XML parsing.</critical_requirement>
 			<output_format>
-				<reasoning>Your thought process: what you learned from current results, what you need to find next, and why</reasoning>
-				<collected_metadata>
-					<identified_tables>
-						<table>
-							<name>table_name</name>
-							<purpose>Purpose of this table in the query</purpose>
-							<key_columns>List of relevant columns</key_columns>
-						</table>
-					</identified_tables>
-					<identified_columns>
-						<column>
-							<table>table_name</table>
-							<name>column_name</name>
-							<data_type>data type</data_type>
-							<purpose>Role in the query (filter, select, join, group by, etc.)</purpose>
-						</column>
-					</identified_columns>
-					<identified_values>
-						<value>
-							<table>table_name</table>
-							<column>column_name</column>
-							<actual_value>The exact value found in the database</actual_value>
-							<user_term>The term user mentioned</user_term>
-						</value>
-					</identified_values>
-					<identified_relationships>
-						<relationship>
-							<type>JOIN type</type>
-							<condition>JOIN condition</condition>
-							<tables>Tables involved</tables>
-						</relationship>
-					</identified_relationships>
-					<identified_constraints>
-						<constraint>
-							<type>WHERE, HAVING, etc.</type>
-							<condition>The actual condition</condition>
-							<status>confirmed or needs_verification</status>
-						</constraint>
-					</identified_constraints>
-				</collected_metadata>
-				<partial_sql>
-					SELECT [columns or PLACEHOLDER_COLUMNS]
-					FROM [tables or PLACEHOLDER_TABLE]
-					[JOIN clauses or PLACEHOLDER_JOINS]
-					WHERE [conditions or PLACEHOLDER_CONDITIONS]
-					[GROUP BY, ORDER BY, LIMIT clauses as needed]
-				</partial_sql>
-				<sql_completeness_check>
-					<is_complete>true/false</is_complete>
-					<missing_info>List what information is still needed, if any</missing_info>
-					<confidence_level>high/medium/low</confidence_level>
-				</sql_completeness_check>
-				<tool_call>
-					<tool_name>Name of the tool to call (or submit_sql if complete)</tool_name>
-					<parameters>Tool parameters in appropriate format</parameters>
-				</tool_call>
+				<output>
+					<reasoning>Your thought process: what you learned from current results, what you need to find next, and why</reasoning>
+					<collected_metadata>
+						<identified_tables>
+							<table>
+								<name>table_name</name>
+								<purpose>Purpose of this table in the query</purpose>
+								<key_columns>List of relevant columns</key_columns>
+							</table>
+						</identified_tables>
+						<identified_columns>
+							<column>
+								<table>table_name</table>
+								<name>column_name</name>
+								<data_type>data type</data_type>
+								<purpose>Role in the query (filter, select, join, group by, etc.)</purpose>
+							</column>
+						</identified_columns>
+						<identified_values>
+							<value>
+								<table>table_name</table>
+								<column>column_name</column>
+								<actual_value>The exact value found in the database</actual_value>
+								<user_term>The term user mentioned</user_term>
+							</value>
+						</identified_values>
+						<identified_relationships>
+							<relationship>
+								<type>JOIN type</type>
+								<condition>JOIN condition</condition>
+								<tables>Tables involved</tables>
+							</relationship>
+						</identified_relationships>
+						<identified_constraints>
+							<constraint>
+								<type>WHERE, HAVING, etc.</type>
+								<condition>The actual condition</condition>
+								<status>confirmed or needs_verification</status>
+							</constraint>
+						</identified_constraints>
+					</collected_metadata>
+					<partial_sql>
+						SELECT [columns or PLACEHOLDER_COLUMNS]
+						FROM [tables or PLACEHOLDER_TABLE]
+						[JOIN clauses or PLACEHOLDER_JOINS]
+						WHERE [conditions or PLACEHOLDER_CONDITIONS]
+						[GROUP BY, ORDER BY, LIMIT clauses as needed]
+					</partial_sql>
+					<sql_completeness_check>
+						<is_complete>true/false</is_complete>
+						<missing_info>List what information is still needed, if any</missing_info>
+						<confidence_level>high/medium/low</confidence_level>
+					</sql_completeness_check>
+					<tool_call>
+						<tool_name>Name of the tool to call (or submit_sql if complete)</tool_name>
+						<parameters>Tool parameters in appropriate format</parameters>
+					</tool_call>
+				</output>
 			</output_format>
-			<note>Always provide all elements: reasoning, collected_metadata (only new information discovered in current iteration), partial_sql, sql_completeness_check, and tool_call</note>
+			<note>Always provide all elements wrapped in &lt;output&gt; root tag: reasoning, collected_metadata (only new information discovered in current iteration), partial_sql, sql_completeness_check, and tool_call</note>
 			
 			<parameters_format>
 				<title>Parameters Format Rules</title>
@@ -391,247 +394,235 @@
 		<scenario>User asks: "지난달 서울 지역 매출 상위 5개 제품은?"</scenario>
 		
 		<iteration n="1">
-			<reasoning>
-				User wants top 5 products by sales in Seoul region for last month.
-				Need to find tables related to: sales/revenue, products, regions/locations, dates.
-				Will search with multiple relevant terms to discover relevant tables.
-			</reasoning>
-			<collected_metadata>
-				<identified_tables></identified_tables>
-				<identified_columns></identified_columns>
-				<identified_values></identified_values>
-				<identified_relationships></identified_relationships>
-				<identified_constraints>
-					<constraint>
-						<type>WHERE</type>
-						<condition>Region filter for Seoul</condition>
-						<status>needs_verification</status>
-					</constraint>
-					<constraint>
-						<type>WHERE</type>
-						<condition>Date filter for last month</condition>
-						<status>needs_verification</status>
-					</constraint>
-					<constraint>
-						<type>LIMIT</type>
-						<condition>TOP 5 results</condition>
-						<status>confirmed</status>
-					</constraint>
-				</identified_constraints>
-			</collected_metadata>
-			<partial_sql>
-				SELECT PLACEHOLDER_COLUMNS
-				FROM PLACEHOLDER_SALES_TABLE
-				PLACEHOLDER_JOINS
-				WHERE PLACEHOLDER_REGION_CONDITION
-				AND PLACEHOLDER_DATE_CONDITION
-				GROUP BY PLACEHOLDER_GROUP_BY
-				ORDER BY PLACEHOLDER_ORDER_BY DESC
-				LIMIT 5
-			</partial_sql>
-			<sql_completeness_check>
-				<is_complete>false</is_complete>
-				<missing_info>Need to identify sales table, product table, region table, and their relationships</missing_info>
-				<confidence_level>low</confidence_level>
-			</sql_completeness_check>
-			<tool_call>
-				<tool_name>search_tables</tool_name>
-				<parameters>["매출", "판매", "제품", "상품", "지역", "서울", "날짜", "월별"]</parameters>
-			</tool_call>
+			<output>
+				<reasoning>
+					User wants top 5 products by sales in Seoul region for last month.
+					Need to find tables related to: sales/revenue, products, regions/locations, dates.
+					Will search with multiple relevant terms to discover relevant tables.
+				</reasoning>
+				<collected_metadata>
+					<identified_tables></identified_tables>
+					<identified_columns></identified_columns>
+					<identified_values></identified_values>
+					<identified_relationships></identified_relationships>
+					<identified_constraints>
+						<constraint>
+							<type>WHERE</type>
+							<condition>Region filter for Seoul</condition>
+							<status>needs_verification</status>
+						</constraint>
+						<constraint>
+							<type>WHERE</type>
+							<condition>Date filter for last month</condition>
+							<status>needs_verification</status>
+						</constraint>
+						<constraint>
+							<type>LIMIT</type>
+							<condition>TOP 5 results</condition>
+							<status>confirmed</status>
+						</constraint>
+					</identified_constraints>
+				</collected_metadata>
+				<partial_sql>
+					SELECT PLACEHOLDER_COLUMNS
+					FROM PLACEHOLDER_SALES_TABLE
+					PLACEHOLDER_JOINS
+					WHERE PLACEHOLDER_REGION_CONDITION
+					AND PLACEHOLDER_DATE_CONDITION
+					GROUP BY PLACEHOLDER_GROUP_BY
+					ORDER BY PLACEHOLDER_ORDER_BY DESC
+					LIMIT 5
+				</partial_sql>
+				<sql_completeness_check>
+					<is_complete>false</is_complete>
+					<missing_info>Need to identify sales table, product table, region table, and their relationships</missing_info>
+					<confidence_level>low</confidence_level>
+				</sql_completeness_check>
+				<tool_call>
+					<tool_name>search_tables</tool_name>
+					<parameters>["매출", "판매", "제품", "상품", "지역", "서울", "날짜", "월별"]</parameters>
+				</tool_call>
+			</output>
 		</iteration>
 		
 		<iteration n="2">
-			<reasoning>
-				Found tables: sales_transactions, products, regions, sales_monthly.
-				sales_transactions appears to be transaction-level detail data, which is suitable for aggregation by product.
-				sales_monthly might be pre-aggregated, but we need product-level detail, so transaction table is more appropriate.
-				Will get schema for sales_transactions, products, and regions to understand structure and relationships.
-			</reasoning>
-			<collected_metadata>
-				<identified_tables>
-					<table>
-						<name>sales_transactions</name>
-						<purpose>Transaction-level sales data for aggregation</purpose>
-						<key_columns>unknown yet</key_columns>
-					</table>
-					<table>
-						<name>products</name>
-						<purpose>Product information</purpose>
-						<key_columns>unknown yet</key_columns>
-					</table>
-					<table>
-						<name>regions</name>
-						<purpose>Region/location data</purpose>
-						<key_columns>unknown yet</key_columns>
-					</table>
-					<table>
-						<name>sales_monthly</name>
-						<purpose>Pre-aggregated monthly data (not selected - need product-level detail)</purpose>
-						<key_columns>N/A</key_columns>
-					</table>
-				</identified_tables>
-				<identified_columns></identified_columns>
-				<identified_values></identified_values>
-				<identified_relationships></identified_relationships>
-				<identified_constraints></identified_constraints>
-			</collected_metadata>
-			<partial_sql>
-				SELECT PLACEHOLDER_PRODUCT_NAME, SUM(PLACEHOLDER_AMOUNT) as total_sales
-				FROM sales_transactions s
-				JOIN products p ON PLACEHOLDER_JOIN_CONDITION
-				JOIN regions r ON PLACEHOLDER_JOIN_CONDITION
-				WHERE PLACEHOLDER_REGION_CONDITION
-				AND PLACEHOLDER_DATE_CONDITION
-				GROUP BY PLACEHOLDER_PRODUCT_NAME
-				ORDER BY total_sales DESC
-				LIMIT 5
-			</partial_sql>
-			<sql_completeness_check>
-				<is_complete>false</is_complete>
-				<missing_info>Need column names, join conditions, exact region value, date column details</missing_info>
-				<confidence_level>low</confidence_level>
-			</sql_completeness_check>
-			<tool_call>
-				<tool_name>get_table_schema</tool_name>
-				<parameters>["sales_transactions", "products", "regions"]</parameters>
-			</tool_call>
+			<output>
+				<reasoning>
+					Found tables: sales_transactions, products, regions, sales_monthly.
+					sales_transactions appears to be transaction-level detail data, which is suitable for aggregation by product.
+					sales_monthly might be pre-aggregated, but we need product-level detail, so transaction table is more appropriate.
+					Will get schema for sales_transactions, products, and regions to understand structure and relationships.
+				</reasoning>
+				<collected_metadata>
+					<identified_tables>
+						<table>
+							<name>sales_transactions</name>
+							<purpose>Transaction-level sales data for aggregation</purpose>
+							<key_columns>unknown yet</key_columns>
+						</table>
+						<table>
+							<name>products</name>
+							<purpose>Product information</purpose>
+							<key_columns>unknown yet</key_columns>
+						</table>
+						<table>
+							<name>regions</name>
+							<purpose>Region/location data</purpose>
+							<key_columns>unknown yet</key_columns>
+						</table>
+						<table>
+							<name>sales_monthly</name>
+							<purpose>Pre-aggregated monthly data (not selected - need product-level detail)</purpose>
+							<key_columns>N/A</key_columns>
+						</table>
+					</identified_tables>
+					<identified_columns></identified_columns>
+					<identified_values></identified_values>
+					<identified_relationships></identified_relationships>
+					<identified_constraints></identified_constraints>
+				</collected_metadata>
+				<partial_sql>
+					SELECT PLACEHOLDER_PRODUCT_NAME, SUM(PLACEHOLDER_AMOUNT) as total_sales
+					FROM sales_transactions s
+					JOIN products p ON PLACEHOLDER_JOIN_CONDITION
+					JOIN regions r ON PLACEHOLDER_JOIN_CONDITION
+					WHERE PLACEHOLDER_REGION_CONDITION
+					AND PLACEHOLDER_DATE_CONDITION
+					GROUP BY PLACEHOLDER_PRODUCT_NAME
+					ORDER BY total_sales DESC
+					LIMIT 5
+				</partial_sql>
+				<sql_completeness_check>
+					<is_complete>false</is_complete>
+					<missing_info>Need column names, join conditions, exact region value, date column details</missing_info>
+					<confidence_level>low</confidence_level>
+				</sql_completeness_check>
+				<tool_call>
+					<tool_name>get_table_schema</tool_name>
+					<parameters>["sales_transactions", "products", "regions"]</parameters>
+				</tool_call>
+			</output>
 		</iteration>
 		
 		<iteration n="3">
-			<reasoning>
-				Schema shows: sales_transactions has product_id, region_id, amount, sale_date.
-				products has product_id (PK), product_name.
-				regions has region_id (PK), region_name.
-				Now I know the structure, but need to verify exact value for "서울" in regions table.
-			</reasoning>
-			<collected_metadata>
-				<identified_tables></identified_tables>
-				<identified_columns>
-					<column>
-						<table>products</table>
-						<name>product_name</name>
-						<data_type>VARCHAR</data_type>
-						<purpose>SELECT</purpose>
-					</column>
-					<column>
-						<table>sales_transactions</table>
-						<name>amount</name>
-						<data_type>NUMERIC</data_type>
-						<purpose>SELECT (aggregated as SUM)</purpose>
-					</column>
-					<column>
-						<table>sales_transactions</table>
-						<name>sale_date</name>
-						<data_type>DATE</data_type>
-						<purpose>WHERE (filter for last month)</purpose>
-					</column>
-					<column>
+			<output>
+				<reasoning>
+					Schema shows: sales_transactions has product_id, region_id, amount, sale_date.
+					products has product_id (PK), product_name.
+					regions has region_id (PK), region_name.
+					Now I know the structure, but need to verify exact value for "서울" in regions table.
+				</reasoning>
+				<collected_metadata>
+					<identified_tables></identified_tables>
+					<identified_columns>
+						<column>
+							<table>products</table>
+							<name>product_name</name>
+							<data_type>VARCHAR</data_type>
+							<purpose>SELECT</purpose>
+						</column>
+						<column>
+							<table>sales_transactions</table>
+							<name>amount</name>
+							<data_type>NUMERIC</data_type>
+							<purpose>SELECT (aggregated as SUM)</purpose>
+						</column>
+						<column>
+							<table>sales_transactions</table>
+							<name>sale_date</name>
+							<data_type>DATE</data_type>
+							<purpose>WHERE (filter for last month)</purpose>
+						</column>
+						<column>
+							<table>regions</table>
+							<name>region_name</name>
+							<data_type>VARCHAR</data_type>
+							<purpose>WHERE (filter for Seoul)</purpose>
+						</column>
+					</identified_columns>
+					<identified_values></identified_values>
+					<identified_relationships>
+						<relationship>
+							<type>INNER JOIN</type>
+							<condition>s.product_id = p.product_id</condition>
+							<tables>sales_transactions, products</tables>
+						</relationship>
+						<relationship>
+							<type>INNER JOIN</type>
+							<condition>s.region_id = r.region_id</condition>
+							<tables>sales_transactions, regions</tables>
+						</relationship>
+					</identified_relationships>
+					<identified_constraints>
+						<constraint>
+							<type>WHERE</type>
+							<condition>sale_date for last month</condition>
+							<status>confirmed</status>
+						</constraint>
+						<constraint>
+							<type>WHERE</type>
+							<condition>region_name = PLACEHOLDER_SEOUL_VALUE</condition>
+							<status>needs_verification</status>
+						</constraint>
+					</identified_constraints>
+				</collected_metadata>
+				<partial_sql>
+					SELECT p.product_name, SUM(s.amount) as total_sales
+					FROM sales_transactions s
+					JOIN products p ON s.product_id = p.product_id
+					JOIN regions r ON s.region_id = r.region_id
+					WHERE r.region_name = 'PLACEHOLDER_SEOUL_VALUE'
+					  AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+					  AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
+					GROUP BY p.product_name
+					ORDER BY total_sales DESC
+					LIMIT 5
+				</partial_sql>
+				<sql_completeness_check>
+					<is_complete>false</is_complete>
+					<missing_info>Need to verify exact value for Seoul in regions.region_name column</missing_info>
+					<confidence_level>medium</confidence_level>
+				</sql_completeness_check>
+				<tool_call>
+					<tool_name>search_column_values</tool_name>
+					<parameters>
 						<table>regions</table>
-						<name>region_name</name>
-						<data_type>VARCHAR</data_type>
-						<purpose>WHERE (filter for Seoul)</purpose>
-					</column>
-				</identified_columns>
-				<identified_values></identified_values>
-				<identified_relationships>
-					<relationship>
-						<type>INNER JOIN</type>
-						<condition>s.product_id = p.product_id</condition>
-						<tables>sales_transactions, products</tables>
-					</relationship>
-					<relationship>
-						<type>INNER JOIN</type>
-						<condition>s.region_id = r.region_id</condition>
-						<tables>sales_transactions, regions</tables>
-					</relationship>
-				</identified_relationships>
-				<identified_constraints>
-					<constraint>
-						<type>WHERE</type>
-						<condition>sale_date for last month</condition>
-						<status>confirmed</status>
-					</constraint>
-					<constraint>
-						<type>WHERE</type>
-						<condition>region_name = PLACEHOLDER_SEOUL_VALUE</condition>
-						<status>needs_verification</status>
-					</constraint>
-				</identified_constraints>
-			</collected_metadata>
-			<partial_sql>
-				SELECT p.product_name, SUM(s.amount) as total_sales
-				FROM sales_transactions s
-				JOIN products p ON s.product_id = p.product_id
-				JOIN regions r ON s.region_id = r.region_id
-				WHERE r.region_name = 'PLACEHOLDER_SEOUL_VALUE'
-				  AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-				  AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-				GROUP BY p.product_name
-				ORDER BY total_sales DESC
-				LIMIT 5
-			</partial_sql>
-			<sql_completeness_check>
-				<is_complete>false</is_complete>
-				<missing_info>Need to verify exact value for Seoul in regions.region_name column</missing_info>
-				<confidence_level>medium</confidence_level>
-			</sql_completeness_check>
-			<tool_call>
-				<tool_name>search_column_values</tool_name>
-				<parameters>
-					<table>regions</table>
-					<column>region_name</column>
-					<search_keywords>["서울", "Seoul"]</search_keywords>
-				</parameters>
-			</tool_call>
+						<column>region_name</column>
+						<search_keywords>["서울", "Seoul"]</search_keywords>
+					</parameters>
+				</tool_call>
+			</output>
 		</iteration>
 		
 		<iteration n="4">
-			<reasoning>
-				Found that Seoul is stored as '서울특별시' in the database.
-				Now I have all the information needed - all placeholders are resolved.
-				However, this query involves multiple joins, date calculations (DATE_TRUNC with intervals), and aggregation.
-				Given the complexity, will validate with execute_sql_preview before final submission to ensure correctness.
-			</reasoning>
-			<collected_metadata>
-				<identified_tables></identified_tables>
-				<identified_columns></identified_columns>
-				<identified_values>
-					<value>
-						<table>regions</table>
-						<column>region_name</column>
-						<actual_value>서울특별시</actual_value>
-						<user_term>서울</user_term>
-					</value>
-				</identified_values>
-				<identified_relationships></identified_relationships>
-				<identified_constraints>
-					<constraint>
-						<type>WHERE</type>
-						<condition>r.region_name = '서울특별시'</condition>
-						<status>confirmed</status>
-					</constraint>
-				</identified_constraints>
-			</collected_metadata>
-			<partial_sql>
-				SELECT p.product_name, SUM(s.amount) as total_sales
-				FROM sales_transactions s
-				JOIN products p ON s.product_id = p.product_id
-				JOIN regions r ON s.region_id = r.region_id
-				WHERE r.region_name = '서울특별시'
-				AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-				AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-				GROUP BY p.product_name
-				ORDER BY total_sales DESC
-				LIMIT 5
-			</partial_sql>
-			<sql_completeness_check>
-				<is_complete>true</is_complete>
-				<missing_info>None - all placeholders resolved, validation recommended due to query complexity</missing_info>
-				<confidence_level>medium</confidence_level>
-			</sql_completeness_check>
-			<tool_call>
-				<tool_name>execute_sql_preview</tool_name>
-				<parameters>
+			<output>
+				<reasoning>
+					Found that Seoul is stored as '서울특별시' in the database.
+					Now I have all the information needed - all placeholders are resolved.
+					However, this query involves multiple joins, date calculations (DATE_TRUNC with intervals), and aggregation.
+					Given the complexity, will validate with execute_sql_preview before final submission to ensure correctness.
+				</reasoning>
+				<collected_metadata>
+					<identified_tables></identified_tables>
+					<identified_columns></identified_columns>
+					<identified_values>
+						<value>
+							<table>regions</table>
+							<column>region_name</column>
+							<actual_value>서울특별시</actual_value>
+							<user_term>서울</user_term>
+						</value>
+					</identified_values>
+					<identified_relationships></identified_relationships>
+					<identified_constraints>
+						<constraint>
+							<type>WHERE</type>
+							<condition>r.region_name = '서울특별시'</condition>
+							<status>confirmed</status>
+						</constraint>
+					</identified_constraints>
+				</collected_metadata>
+				<partial_sql>
 					SELECT p.product_name, SUM(s.amount) as total_sales
 					FROM sales_transactions s
 					JOIN products p ON s.product_id = p.product_id
@@ -642,43 +633,45 @@
 					GROUP BY p.product_name
 					ORDER BY total_sales DESC
 					LIMIT 5
-				</parameters>
-			</tool_call>
+				</partial_sql>
+				<sql_completeness_check>
+					<is_complete>true</is_complete>
+					<missing_info>None - all placeholders resolved, validation recommended due to query complexity</missing_info>
+					<confidence_level>medium</confidence_level>
+				</sql_completeness_check>
+				<tool_call>
+					<tool_name>execute_sql_preview</tool_name>
+					<parameters>
+						SELECT p.product_name, SUM(s.amount) as total_sales
+						FROM sales_transactions s
+						JOIN products p ON s.product_id = p.product_id
+						JOIN regions r ON s.region_id = r.region_id
+						WHERE r.region_name = '서울특별시'
+						AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+						AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
+						GROUP BY p.product_name
+						ORDER BY total_sales DESC
+						LIMIT 5
+					</parameters>
+				</tool_call>
+			</output>
 		</iteration>
 		
 		<iteration n="5">
-			<reasoning>
-				Preview executed successfully and returned expected results showing 5 products with sales amounts.
-				Validation confirmed: joins work correctly, date filtering returns last month's data, aggregation is accurate, and results are properly ordered.
-				The SQL is fully validated and working correctly. Confidence upgraded from medium to high. Ready to submit the final query.
-			</reasoning>
-			<collected_metadata>
-				<identified_tables></identified_tables>
-				<identified_columns></identified_columns>
-				<identified_values></identified_values>
-				<identified_relationships></identified_relationships>
-				<identified_constraints></identified_constraints>
-			</collected_metadata>
-			<partial_sql>
-				SELECT p.product_name, SUM(s.amount) as total_sales
-				FROM sales_transactions s
-				JOIN products p ON s.product_id = p.product_id
-				JOIN regions r ON s.region_id = r.region_id
-				WHERE r.region_name = '서울특별시'
-				AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-				AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-				GROUP BY p.product_name
-				ORDER BY total_sales DESC
-				LIMIT 5
-			</partial_sql>
-			<sql_completeness_check>
-				<is_complete>true</is_complete>
-				<missing_info>None - SQL validated and ready</missing_info>
-				<confidence_level>high</confidence_level>
-			</sql_completeness_check>
-			<tool_call>
-				<tool_name>submit_sql</tool_name>
-				<parameters>
+			<output>
+				<reasoning>
+					Preview executed successfully and returned expected results showing 5 products with sales amounts.
+					Validation confirmed: joins work correctly, date filtering returns last month's data, aggregation is accurate, and results are properly ordered.
+					The SQL is fully validated and working correctly. Confidence upgraded from medium to high. Ready to submit the final query.
+				</reasoning>
+				<collected_metadata>
+					<identified_tables></identified_tables>
+					<identified_columns></identified_columns>
+					<identified_values></identified_values>
+					<identified_relationships></identified_relationships>
+					<identified_constraints></identified_constraints>
+				</collected_metadata>
+				<partial_sql>
 					SELECT p.product_name, SUM(s.amount) as total_sales
 					FROM sales_transactions s
 					JOIN products p ON s.product_id = p.product_id
@@ -689,8 +682,28 @@
 					GROUP BY p.product_name
 					ORDER BY total_sales DESC
 					LIMIT 5
-				</parameters>
-			</tool_call>
+				</partial_sql>
+				<sql_completeness_check>
+					<is_complete>true</is_complete>
+					<missing_info>None - SQL validated and ready</missing_info>
+					<confidence_level>high</confidence_level>
+				</sql_completeness_check>
+				<tool_call>
+					<tool_name>submit_sql</tool_name>
+					<parameters>
+						SELECT p.product_name, SUM(s.amount) as total_sales
+						FROM sales_transactions s
+						JOIN products p ON s.product_id = p.product_id
+						JOIN regions r ON s.region_id = r.region_id
+						WHERE r.region_name = '서울특별시'
+						AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+						AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
+						GROUP BY p.product_name
+						ORDER BY total_sales DESC
+						LIMIT 5
+					</parameters>
+				</tool_call>
+			</output>
 		</iteration>
 	</example_workflow>
 </instruction>

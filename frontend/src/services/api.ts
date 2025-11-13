@@ -1,7 +1,12 @@
 import axios from 'axios'
 
+type ImportMetaWithEnv = ImportMeta & {
+  env?: Record<string, string | undefined>
+}
+
 // Gateway를 통한 접근: http://localhost:9090/api
-const API_BASE = import.meta.env.VITE_API_URL || '/api'
+const metaEnv = ((import.meta as ImportMetaWithEnv).env ?? {}) as Record<string, string | undefined>
+const API_BASE = metaEnv.VITE_API_URL || '/api'
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -73,6 +78,81 @@ export interface FeedbackRequest {
   approved: boolean
 }
 
+export interface ReactSQLCompleteness {
+  is_complete: boolean
+  missing_info: string
+  confidence_level: string
+}
+
+export interface ReactToolCallModel {
+  name: string
+  raw_parameters_xml: string
+  parameters: Record<string, any>
+}
+
+export interface ReactStepModel {
+  iteration: number
+  reasoning: string
+  metadata_xml: string
+  partial_sql: string
+  sql_completeness: ReactSQLCompleteness
+  tool_call: ReactToolCallModel
+  tool_result?: string | null
+  llm_output: string
+}
+
+export interface ReactExecutionResult {
+  columns: string[]
+  rows: any[][]
+  row_count: number
+  execution_time_ms: number
+}
+
+export interface ReactResponseModel {
+  status: 'completed' | 'needs_user_input'
+  final_sql?: string | null
+  validated_sql?: string | null
+  execution_result?: ReactExecutionResult | null
+  steps: ReactStepModel[]
+  collected_metadata: string
+  partial_sql: string
+  remaining_tool_calls: number
+  session_state?: string | null
+  question_to_user?: string | null
+  warnings?: string[] | null
+}
+
+export interface ReactRequest {
+  question: string
+  dbms?: string | null
+  max_tool_calls?: number
+  execute_final_sql?: boolean
+  max_iterations?: number | null
+  session_state?: string | null
+  user_response?: string | null
+}
+
+export type ReactStreamEvent =
+  | {
+    event: 'step'
+    step: ReactStepModel
+    state: Record<string, any>
+  }
+  | {
+    event: 'completed'
+    response: ReactResponseModel
+    state: Record<string, any>
+  }
+  | {
+    event: 'needs_user_input'
+    response: ReactResponseModel
+    state: Record<string, any>
+  }
+  | {
+    event: 'error'
+    message: string
+  }
+
 export const apiService = {
   // 자연어 질의
   async ask(request: AskRequest): Promise<AskResponse> {
@@ -130,6 +210,65 @@ export const apiService = {
   async healthCheck(): Promise<any> {
     const { data } = await api.get('/health')
     return data
+  },
+
+  async *reactStream(
+    request: ReactRequest,
+    options: { signal?: AbortSignal } = {}
+  ): AsyncGenerator<ReactStreamEvent, void, unknown> {
+    const response = await fetch(`${API_BASE}/react`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(request),
+      signal: options.signal
+    })
+
+    if (!response.ok || !response.body) {
+      const message = await response.text()
+      throw new Error(message || 'ReAct 요청에 실패했습니다.')
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+        buffer += decoder.decode(value, { stream: true })
+        let newlineIndex = buffer.indexOf('\n')
+        while (newlineIndex !== -1) {
+          const rawLine = buffer.slice(0, newlineIndex).trim()
+          buffer = buffer.slice(newlineIndex + 1)
+          if (rawLine) {
+            try {
+              const parsed = JSON.parse(rawLine) as ReactStreamEvent
+              yield parsed
+            } catch (error) {
+              console.warn('ReAct 이벤트 파싱 실패', error, rawLine)
+            }
+          }
+          newlineIndex = buffer.indexOf('\n')
+        }
+      }
+
+      const remaining = buffer.trim()
+      if (remaining) {
+        try {
+          const parsed = JSON.parse(remaining) as ReactStreamEvent
+          yield parsed
+        } catch (error) {
+          console.warn('ReAct 마지막 이벤트 파싱 실패', error, remaining)
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
   }
 }
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -110,13 +112,13 @@ def _ensure_state_from_request(request: ReactRequest) -> ReactSessionState:
     )
 
 
-@router.post("", response_model=ReactResponse)
+@router.post("", response_class=StreamingResponse)
 async def run_react(
     request: ReactRequest,
     neo4j_session=Depends(get_neo4j_session),
     db_conn=Depends(get_db_connection),
     openai_client=Depends(get_openai_client),
-) -> ReactResponse:
+) -> StreamingResponse:
     state = _ensure_state_from_request(request)
 
     tool_context = ToolContext(
@@ -126,67 +128,118 @@ async def run_react(
     )
 
     agent = ReactAgent(PROMPT_PATH)
-    outcome = await agent.run(
-        state=state,
-        tool_context=tool_context,
-        max_iterations=request.max_iterations,
-        user_response=request.user_response,
-    )
-
-    steps = [_step_to_model(step) for step in outcome.steps]
     warnings: List[str] = []
+    steps: List[ReactStepModel] = []
 
-    if outcome.status == "ask_user":
-        question = outcome.question_to_user or ""
-        state.current_tool_result = (
-            "<tool_result>"
-            f"<ask_user_question>{_to_cdata(question)}</ask_user_question>"
-            "</tool_result>"
-        )
-        session_token = state.to_token()
-        return ReactResponse(
-            status="needs_user_input",
-            steps=steps,
-            collected_metadata=state.metadata.to_xml(),
-            partial_sql=state.partial_sql,
-            remaining_tool_calls=state.remaining_tool_calls,
-            session_state=session_token,
-            question_to_user=question,
-            warnings=warnings or None,
-        )
-
-    if outcome.status != "submit_sql":
-        raise HTTPException(status_code=500, detail="Agent did not complete with submit_sql.")
-
-    final_sql = outcome.final_sql or ""
-    validated_sql = None
-    execution_result = None
-
-    guard = SQLGuard()
-    try:
-        validated_sql, _ = guard.validate(final_sql)
-    except SQLValidationError as exc:
-        raise HTTPException(status_code=400, detail=f"SQL validation failed: {exc}") from exc
-
-    if request.execute_final_sql:
-        executor = SQLExecutor()
+    async def event_iterator():
+        nonlocal warnings
         try:
-            raw_result = await executor.execute_query(db_conn, validated_sql)
-            formatted = executor.format_results_for_json(raw_result)
-            execution_result = ExecutionResultModel(**formatted)
-        except SQLExecutionError as exc:
-            warnings.append(f"SQL execution failed: {exc}")
+            async for event in agent.stream(
+                state=state,
+                tool_context=tool_context,
+                max_iterations=request.max_iterations,
+                user_response=request.user_response,
+            ):
+                event_type = event["type"]
 
-    return ReactResponse(
-        status="completed",
-        final_sql=final_sql,
-        validated_sql=validated_sql,
-        execution_result=execution_result,
-        steps=steps,
-        collected_metadata=state.metadata.to_xml(),
-        partial_sql=state.partial_sql,
-        remaining_tool_calls=state.remaining_tool_calls,
-        session_state=None,
-        question_to_user=None,
-        warnings=warnings or None,
-    )
+                if event_type == "step":
+                    step_model = _step_to_model(event["step"])
+                    steps.append(step_model)
+                    payload = {
+                        "event": "step",
+                        "step": step_model.model_dump(),
+                        "state": event["state"],
+                    }
+                    yield json.dumps(payload, ensure_ascii=False) + "\n"
+                    continue
+
+                if event_type == "outcome":
+                    outcome: AgentOutcome = event["outcome"]
+
+                    if outcome.status == "ask_user":
+                        question = outcome.question_to_user or ""
+                        state.current_tool_result = (
+                            "<tool_result>"
+                            f"<ask_user_question>{_to_cdata(question)}</ask_user_question>"
+                            "</tool_result>"
+                        )
+                        session_token = event.get("session_token") or state.to_token()
+                        response_payload = ReactResponse(
+                            status="needs_user_input",
+                            steps=steps,
+                            collected_metadata=state.metadata.to_xml(),
+                            partial_sql=state.partial_sql,
+                            remaining_tool_calls=state.remaining_tool_calls,
+                            session_state=session_token,
+                            question_to_user=question,
+                            warnings=None,
+                        )
+                        payload = {
+                            "event": "needs_user_input",
+                            "response": response_payload.model_dump(),
+                            "state": event["state"],
+                        }
+                        yield json.dumps(payload, ensure_ascii=False) + "\n"
+                        return
+
+                    if outcome.status != "submit_sql":
+                        error_payload = {
+                            "event": "error",
+                            "message": "Agent did not complete with submit_sql.",
+                        }
+                        yield json.dumps(error_payload, ensure_ascii=False) + "\n"
+                        return
+
+                    final_sql = outcome.final_sql or ""
+                    guard = SQLGuard()
+                    try:
+                        validated_sql, _ = guard.validate(final_sql)
+                    except SQLValidationError as exc:
+                        error_payload = {
+                            "event": "error",
+                            "message": f"SQL validation failed: {exc}",
+                        }
+                        yield json.dumps(error_payload, ensure_ascii=False) + "\n"
+                        return
+
+                    execution_result = None
+                    if request.execute_final_sql:
+                        executor = SQLExecutor()
+                        try:
+                            raw_result = await executor.execute_query(db_conn, validated_sql)
+                            formatted = executor.format_results_for_json(raw_result)
+                            execution_result = ExecutionResultModel(**formatted)
+                        except SQLExecutionError as exc:
+                            warnings.append(f"SQL execution failed: {exc}")
+
+                    response_payload = ReactResponse(
+                        status="completed",
+                        final_sql=final_sql,
+                        validated_sql=validated_sql,
+                        execution_result=execution_result,
+                        steps=steps,
+                        collected_metadata=state.metadata.to_xml(),
+                        partial_sql=state.partial_sql,
+                        remaining_tool_calls=state.remaining_tool_calls,
+                        session_state=None,
+                        question_to_user=None,
+                        warnings=warnings or None,
+                    )
+                    payload = {
+                        "event": "completed",
+                        "response": response_payload.model_dump(),
+                        "state": event["state"],
+                    }
+                    yield json.dumps(payload, ensure_ascii=False) + "\n"
+                    return
+
+                if event_type == "error":
+                    message = str(event["error"])
+                    payload = {"event": "error", "message": message}
+                    yield json.dumps(payload, ensure_ascii=False) + "\n"
+                    return
+        except Exception as exc:
+            payload = {"event": "error", "message": str(exc)}
+            yield json.dumps(payload, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(event_iterator(), media_type="application/x-ndjson")

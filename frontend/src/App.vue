@@ -8,6 +8,7 @@
         <div class="nav-links">
           <router-link to="/" class="nav-link">질의</router-link>
           <router-link to="/schema" class="nav-link">스키마</router-link>
+          <router-link to="/react" class="nav-link">ReAct</router-link>
           <div class="health-indicator" :class="healthStatus">
             <span class="dot"></span>
             {{ healthStatus === 'healthy' ? '정상' : '확인 중' }}
@@ -63,7 +64,7 @@ body {
 
 .navbar {
   background: white;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   position: sticky;
   top: 0;
   z-index: 1000;
@@ -139,8 +140,15 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .main-content {
@@ -156,4 +164,3 @@ body {
   font-size: 0.9rem;
 }
 </style>
-

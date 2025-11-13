@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_project: str = ""
     langsmith_api_key: str = ""
+
+    # ReAct
+    is_add_delay_after_react_generator: bool = False
+    delay_after_react_generator_seconds: int = 3
     
     class Config:
         env_file = ".env"

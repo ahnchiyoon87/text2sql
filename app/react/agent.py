@@ -1,8 +1,18 @@
 import ast
+import asyncio
+import contextlib
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import xml.etree.ElementTree as ET
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+)
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -75,6 +85,8 @@ class ReactAgent:
         tool_context: ToolContext,
         max_iterations: Optional[int] = None,
         user_response: Optional[str] = None,
+        on_step: Optional[Callable[[ReactStep, ReactSessionState], Awaitable[None]]] = None,
+        on_outcome: Optional[Callable[[AgentOutcome, ReactSessionState], Awaitable[None]]] = None,
     ) -> AgentOutcome:
         """
         ReAct 루프를 돌며 툴을 실행한다.
@@ -118,22 +130,32 @@ class ReactAgent:
 
             if tool_name == "submit_sql":
                 sql_text = step.tool_call.parsed_parameters.get("sql", "")
-                return AgentOutcome(
+                outcome = AgentOutcome(
                     status="submit_sql",
                     steps=steps,
                     final_sql=sql_text,
                     metadata=state.metadata,
                 )
+                if on_step:
+                    await on_step(step, state)
+                if on_outcome:
+                    await on_outcome(outcome, state)
+                return outcome
 
             if tool_name == "ask_user":
                 question = step.tool_call.parsed_parameters.get("question", "")
                 state.remaining_tool_calls -= 1
-                return AgentOutcome(
+                outcome = AgentOutcome(
                     status="ask_user",
                     steps=steps,
                     metadata=state.metadata,
                     question_to_user=question,
                 )
+                if on_step:
+                    await on_step(step, state)
+                if on_outcome:
+                    await on_outcome(outcome, state)
+                return outcome
 
             # Execute actual tool
             try:
@@ -149,8 +171,67 @@ class ReactAgent:
 
             # Update step with tool result
             step.tool_result = tool_result
+            if on_step:
+                await on_step(step, state)
 
         raise ReactAgentError("Iteration limit reached without completion.")
+
+    async def stream(
+        self,
+        state: ReactSessionState,
+        tool_context: ToolContext,
+        max_iterations: Optional[int] = None,
+        user_response: Optional[str] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+
+        async def on_step_callback(step: ReactStep, state_snapshot: ReactSessionState) -> None:
+            await queue.put(
+                {
+                    "type": "step",
+                    "step": step,
+                    "state": state_snapshot.to_dict(),
+                }
+            )
+
+        async def on_outcome_callback(outcome: AgentOutcome, state_snapshot: ReactSessionState) -> None:
+            payload: Dict[str, Any] = {
+                "type": "outcome",
+                "outcome": outcome,
+                "state": state_snapshot.to_dict(),
+            }
+            if outcome.status == "ask_user":
+                payload["session_token"] = state_snapshot.to_token()
+            await queue.put(payload)
+
+        async def runner() -> None:
+            try:
+                await self.run(
+                    state=state,
+                    tool_context=tool_context,
+                    max_iterations=max_iterations,
+                    user_response=user_response,
+                    on_step=on_step_callback,
+                    on_outcome=on_outcome_callback,
+                )
+            except Exception as exc:
+                await queue.put({"type": "error", "error": exc})
+            finally:
+                await queue.put({"type": "done"})
+
+        task = asyncio.create_task(runner())
+
+        try:
+            while True:
+                event = await queue.get()
+                if event["type"] == "done":
+                    break
+                yield event
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     def _build_input_xml(self, state: ReactSessionState) -> str:
         parts = ["<input>"]
@@ -171,6 +252,9 @@ class ReactAgent:
             HumanMessage(content=input_xml),
         ]
         response = await self.llm.ainvoke(messages)
+        if settings.is_add_delay_after_react_generator:
+            await asyncio.sleep(settings.delay_after_react_generator_seconds)
+
         if isinstance(response.content, str):
             return response.content
         if isinstance(response.content, list):
@@ -186,10 +270,7 @@ class ReactAgent:
         if start_idx > 0:
             cleaned = cleaned[start_idx:]
 
-        try:
-            root = ET.fromstring(cleaned)
-        except ET.ParseError as exc:
-            raise LLMResponseFormatError(f"Invalid XML from LLM: {exc}\nRaw: {response_text}") from exc
+        root = self._parse_xml_with_recovery(cleaned, response_text)
 
         reasoning = (root.findtext("reasoning") or "").strip()
         metadata_el = root.find("collected_metadata")
@@ -283,4 +364,17 @@ class ReactAgent:
         except (ValueError, SyntaxError):
             pass
         return [literal_text]
+
+    def _parse_xml_with_recovery(self, xml_text: str, raw_response: str) -> ET.Element:
+        try:
+            return ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            wrapped_xml = f"<output>{xml_text}</output>"
+            try:
+                return ET.fromstring(wrapped_xml)
+            except ET.ParseError:
+                raise LLMResponseFormatError(
+                    f"Invalid XML from LLM: {exc}\nRaw: {raw_response}"
+                ) from exc
+
 
