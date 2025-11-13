@@ -1,0 +1,20 @@
+from dotenv import load_dotenv
+
+def pytest_configure(config):
+    """pytest 설정 시 환경 변수 로드"""
+    load_dotenv()
+
+def pytest_collection_modifyitems(items):
+    """테스트 실행 순서를 커스터마이징"""
+    priority_order = [
+        'tests\\datas\\'
+    ]
+    
+    def get_priority(item):
+        item_path = str(item.fspath)
+        for idx, pattern in enumerate(priority_order):
+            if pattern in item_path:
+                return idx
+        return len(priority_order)
+    
+    items.sort(key=get_priority)

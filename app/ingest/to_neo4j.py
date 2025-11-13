@@ -13,6 +13,22 @@ class Neo4jSchemaLoader:
         self.session = session
         self.embedding_client = embedding_client
     
+    def _normalize_nullable(self, value: Any) -> bool:
+        """Normalize nullable field into boolean"""
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"no", "false", "n", "0"}:
+                return False
+            if normalized in {"yes", "true", "y", "1"}:
+                return True
+        
+        return bool(value)
+    
     async def setup_constraints_and_indexes(self):
         """Create Neo4j constraints and vector indexes"""
         queries = [
@@ -70,6 +86,7 @@ class Neo4jSchemaLoader:
             query = """
             MERGE (t:Table {db: $db, schema: $schema, name: $name})
             SET t.vector = $vector,
+                t.description = $description,
                 t.updated_at = datetime()
             RETURN t
             """
@@ -79,7 +96,8 @@ class Neo4jSchemaLoader:
                 db=db_name,
                 schema=table["schema"],
                 name=table["name"],
-                vector=embedding
+                vector=embedding,
+                description=table.get("description") or ""
             )
         
         print(f"Loaded {len(tables)} tables")
@@ -112,11 +130,16 @@ class Neo4jSchemaLoader:
             # fqn = f"{db_name}.{col['schema']}.{col['table_name']}.{col['name']}"
             # Standardize FQN: schema.table.column in lowercase (no db prefix)
             fqn = f"{col['schema']}.{col['table_name']}.{col['name']}".lower()
+            nullable = self._normalize_nullable(col.get("nullable"))
             
             query = """
             MATCH (t:Table {db: $db, schema: $schema, name: $table_name})
             MERGE (c:Column {fqn: $fqn})
             SET c.vector = $vector,
+                c.name = $column_name,
+                c.dtype = $dtype,
+                c.description = $description,
+                c.nullable = $nullable,
                 c.updated_at = datetime()
             MERGE (t)-[:HAS_COLUMN]->(c)
             RETURN c
@@ -128,7 +151,11 @@ class Neo4jSchemaLoader:
                 schema=col["schema"],
                 table_name=col["table_name"],
                 fqn=fqn,
-                vector=embedding
+                vector=embedding,
+                column_name=col["name"],
+                dtype=col.get("dtype") or "",
+                description=col.get("description") or "",
+                nullable=nullable
             )
         
         print(f"Loaded {len(columns)} columns")

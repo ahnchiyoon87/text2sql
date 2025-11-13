@@ -1,10 +1,24 @@
 """Dependency injection for FastAPI"""
+import os
 from typing import AsyncGenerator
 from neo4j import AsyncGraphDatabase, AsyncDriver
 import asyncpg
 from openai import AsyncOpenAI
+from langchain_community.cache import SQLiteCache
+from langchain_core.globals import set_llm_cache
+
 
 from app.config import settings
+
+
+def init_cache():
+    if not os.path.exists(settings.llm_cache_path):
+        os.makedirs(os.path.dirname(settings.llm_cache_path))
+
+    set_llm_cache(SQLiteCache(database_path=settings.llm_cache_path))
+
+if settings.is_use_llm_cache:
+    init_cache()
 
 
 class Neo4jConnection:

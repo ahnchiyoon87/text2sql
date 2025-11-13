@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_embedding_model: str = "text-embedding-3-small"
     openai_llm_model: str = "gpt-4o-mini"
+    is_use_llm_cache: bool = False
+    llm_cache_path: str = ".cache/llm_cache.db"
     
     # Target Database
     target_db_type: Literal["postgresql", "mysql", "oracle"] = "postgresql"
@@ -44,6 +46,11 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = "INFO"
+
+    # LangSmith
+    langsmith_tracing: bool = False
+    langsmith_project: str = ""
+    langsmith_api_key: str = ""
     
     class Config:
         env_file = ".env"

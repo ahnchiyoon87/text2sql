@@ -134,3 +134,7 @@ build/
 # Compiled class file
 hs_err_pid*
 replay_pid*
+
+# Private Datas
+p_*
+.temp

@@ -1,0 +1,286 @@
+import ast
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import xml.etree.ElementTree as ET
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+
+from app.config import settings
+from app.react.state import ReactMetadata, ReactSessionState, MetadataParseError
+from app.react.tools import ToolContext, ToolExecutionError, execute_tool
+
+
+class ReactAgentError(Exception):
+    """ReAct 에이전트 실행 중 발생한 일반적인 오류"""
+
+
+class LLMResponseFormatError(ReactAgentError):
+    """LLM 이 잘못된 XML 포맷을 반환했을 때"""
+
+
+@dataclass
+class SQLCompleteness:
+    is_complete: bool
+    missing_info: str
+    confidence_level: str
+
+
+@dataclass
+class ToolCall:
+    name: str
+    raw_parameters_xml: str
+    parsed_parameters: Dict[str, Any]
+
+
+@dataclass
+class ReactStep:
+    iteration: int
+    reasoning: str
+    metadata_xml: str
+    partial_sql: str
+    sql_completeness: SQLCompleteness
+    tool_call: ToolCall
+    tool_result: Optional[str] = None
+    llm_output: str = ""
+
+
+@dataclass
+class AgentOutcome:
+    status: str
+    steps: List[ReactStep]
+    final_sql: Optional[str] = None
+    final_sql_validated: Optional[str] = None
+    metadata: ReactMetadata = field(default_factory=ReactMetadata)
+    question_to_user: Optional[str] = None
+
+
+def _to_cdata(value: str) -> str:
+    return f"<![CDATA[{value}]]>"
+
+
+class ReactAgent:
+    def __init__(self, prompt_path: Path):
+        self.prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.llm = ChatOpenAI(
+            model=settings.openai_llm_model,
+            temperature=0,
+            api_key=settings.openai_api_key,
+        )
+
+    async def run(
+        self,
+        state: ReactSessionState,
+        tool_context: ToolContext,
+        max_iterations: Optional[int] = None,
+        user_response: Optional[str] = None,
+    ) -> AgentOutcome:
+        """
+        ReAct 루프를 돌며 툴을 실행한다.
+        user_response 가 주어지면 가장 최근 tool_result 로 전달한다.
+        """
+        if user_response:
+            state.current_tool_result = (
+                "<tool_result>"
+                f"<user_response>{_to_cdata(user_response)}</user_response>"
+                "</tool_result>"
+            )
+
+        steps: List[ReactStep] = []
+        iteration_limit = max_iterations or (state.remaining_tool_calls + 10)
+
+        for _ in range(iteration_limit):
+            if state.remaining_tool_calls <= 0:
+                raise ReactAgentError("No remaining tool calls.")
+
+            if max_iterations and len(steps) >= max_iterations:
+                break
+
+            state.iteration += 1
+            input_xml = self._build_input_xml(state)
+            llm_response = await self._call_llm(input_xml)
+            parsed_step = self._parse_llm_response(llm_response, state.iteration)
+
+            # Update metadata and partial SQL based on LLM output
+            try:
+                state.metadata.update_from_xml(parsed_step.metadata_xml)
+            except MetadataParseError as exc:
+                raise ReactAgentError(str(exc)) from exc
+
+            state.partial_sql = parsed_step.partial_sql or state.partial_sql
+
+            # Defer tool result assignment; handle by tool execution
+            step = parsed_step
+            steps.append(step)
+
+            tool_name = step.tool_call.name
+
+            if tool_name == "submit_sql":
+                sql_text = step.tool_call.parsed_parameters.get("sql", "")
+                return AgentOutcome(
+                    status="submit_sql",
+                    steps=steps,
+                    final_sql=sql_text,
+                    metadata=state.metadata,
+                )
+
+            if tool_name == "ask_user":
+                question = step.tool_call.parsed_parameters.get("question", "")
+                state.remaining_tool_calls -= 1
+                return AgentOutcome(
+                    status="ask_user",
+                    steps=steps,
+                    metadata=state.metadata,
+                    question_to_user=question,
+                )
+
+            # Execute actual tool
+            try:
+                tool_result = await execute_tool(
+                    tool_name=tool_name,
+                    context=tool_context,
+                    parameters=step.tool_call.parsed_parameters,
+                )
+            except ToolExecutionError as exc:
+                raise ReactAgentError(str(exc)) from exc
+            state.current_tool_result = tool_result
+            state.remaining_tool_calls -= 1
+
+            # Update step with tool result
+            step.tool_result = tool_result
+
+        raise ReactAgentError("Iteration limit reached without completion.")
+
+    def _build_input_xml(self, state: ReactSessionState) -> str:
+        parts = ["<input>"]
+        parts.append(f"<user_query><![CDATA[{state.user_query}]]></user_query>")
+        parts.append(f"<dbms>{state.dbms}</dbms>")
+        parts.append(f"<remaining_tool_calls>{state.remaining_tool_calls}</remaining_tool_calls>")
+        parts.append("<current_tool_result>")
+        parts.append(state.current_tool_result or "<tool_result/>")
+        parts.append("</current_tool_result>")
+        parts.append(state.metadata.to_xml())
+        parts.append(f"<partial_sql><![CDATA[{state.partial_sql}]]></partial_sql>")
+        parts.append("</input>")
+        return "\n".join(parts)
+
+    async def _call_llm(self, input_xml: str) -> str:
+        messages = [
+            SystemMessage(content=self.prompt_text),
+            HumanMessage(content=input_xml),
+        ]
+        response = await self.llm.ainvoke(messages)
+        if isinstance(response.content, str):
+            return response.content
+        if isinstance(response.content, list):
+            return "\n".join(
+                part["text"] if isinstance(part, dict) and "text" in part else str(part)
+                for part in response.content
+            )
+        return str(response.content)
+
+    def _parse_llm_response(self, response_text: str, iteration: int) -> ReactStep:
+        cleaned = response_text.strip()
+        start_idx = cleaned.find("<")
+        if start_idx > 0:
+            cleaned = cleaned[start_idx:]
+
+        try:
+            root = ET.fromstring(cleaned)
+        except ET.ParseError as exc:
+            raise LLMResponseFormatError(f"Invalid XML from LLM: {exc}\nRaw: {response_text}") from exc
+
+        reasoning = (root.findtext("reasoning") or "").strip()
+        metadata_el = root.find("collected_metadata")
+        if metadata_el is None:
+            raise LLMResponseFormatError("Missing <collected_metadata> section.")
+        metadata_xml = ET.tostring(metadata_el, encoding="unicode")
+
+        partial_sql = (root.findtext("partial_sql") or "").strip()
+
+        sql_check_el = root.find("sql_completeness_check")
+        if sql_check_el is None:
+            raise LLMResponseFormatError("Missing <sql_completeness_check> section.")
+
+        is_complete_text = (sql_check_el.findtext("is_complete") or "").strip().lower()
+        is_complete = is_complete_text == "true"
+        missing_info = (sql_check_el.findtext("missing_info") or "").strip()
+        confidence_level = (sql_check_el.findtext("confidence_level") or "").strip()
+        completeness = SQLCompleteness(
+            is_complete=is_complete,
+            missing_info=missing_info,
+            confidence_level=confidence_level,
+        )
+
+        tool_call_el = root.find("tool_call")
+        if tool_call_el is None:
+            raise LLMResponseFormatError("Missing <tool_call> section.")
+
+        tool_name = (tool_call_el.findtext("tool_name") or "").strip()
+        parameters_el = tool_call_el.find("parameters")
+        if not tool_name or parameters_el is None:
+            raise LLMResponseFormatError("Invalid tool_call structure.")
+
+        raw_parameters_xml = ET.tostring(parameters_el, encoding="unicode")
+        parsed_parameters = self._parse_tool_parameters(tool_name, parameters_el)
+
+        return ReactStep(
+            iteration=iteration,
+            reasoning=reasoning,
+            metadata_xml=metadata_xml,
+            partial_sql=partial_sql,
+            sql_completeness=completeness,
+            tool_call=ToolCall(
+                name=tool_name,
+                raw_parameters_xml=raw_parameters_xml,
+                parsed_parameters=parsed_parameters,
+            ),
+            llm_output=response_text,
+        )
+
+    def _parse_tool_parameters(
+        self,
+        tool_name: str,
+        parameters_el: ET.Element,
+    ) -> Dict[str, Any]:
+        if tool_name in {"search_tables", "get_table_schema"}:
+            text = (parameters_el.text or "").strip()
+            keywords = self._parse_list_literal(text)
+            key = "keywords" if tool_name == "search_tables" else "table_names"
+            return {key: keywords}
+
+        if tool_name == "search_column_values":
+            table_name = (parameters_el.findtext("table") or "").strip()
+            column_name = (parameters_el.findtext("column") or "").strip()
+            keywords_text = (parameters_el.findtext("search_keywords") or "").strip()
+            keywords = self._parse_list_literal(keywords_text)
+            return {
+                "table": table_name,
+                "column": column_name,
+                "search_keywords": keywords,
+            }
+
+        if tool_name in {"execute_sql_preview", "submit_sql"}:
+            # parameters element may include nested tags; we take inner text
+            sql_text = "".join(parameters_el.itertext()).strip()
+            return {"sql": sql_text}
+
+        if tool_name == "ask_user":
+            question = "".join(parameters_el.itertext()).strip()
+            return {"question": question}
+
+        raise LLMResponseFormatError(f"Unsupported tool requested: {tool_name}")
+
+    @staticmethod
+    def _parse_list_literal(literal_text: str) -> List[str]:
+        if not literal_text:
+            return []
+        try:
+            parsed = ast.literal_eval(literal_text)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except (ValueError, SyntaxError):
+            pass
+        return [literal_text]
+
