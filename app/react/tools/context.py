@@ -17,7 +17,7 @@ class ToolContext:
     neo4j_session: AsyncSession
     db_conn: asyncpg.Connection
     openai_client: AsyncOpenAI
-    table_top_k: int = 10
+    table_top_k: int = 20
     table_relation_limit: int = 20
     column_relation_limit: int = 10
     value_limit: int = 10

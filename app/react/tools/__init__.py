@@ -46,10 +46,17 @@ async def execute_tool(
     if tool_name == "search_column_values":
         table_name = parameters.get("table")
         column_name = parameters.get("column")
+        schema_name = parameters.get("schema")
         search_keywords: List[str] = parameters.get("search_keywords", [])
         if not table_name or not column_name:
             raise ToolExecutionError("table and column parameters are required")
-        return await handler(context, table_name, column_name, search_keywords)
+        return await handler(
+            context,
+            table_name,
+            column_name,
+            search_keywords,
+            schema_name,
+        )
 
     if tool_name == "execute_sql_preview":
         sql_text = parameters.get("sql")

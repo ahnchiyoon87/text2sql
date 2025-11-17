@@ -111,7 +111,10 @@ class SQLGuard:
             )
         
         for subquery in parsed.find_all(exp.Subquery):
-            self._check_subquery_depth(subquery, depth + 1)
+            inner_expr = subquery.this
+            if not isinstance(inner_expr, exp.Expression):
+                continue
+            self._check_subquery_depth(inner_expr, depth + 1)
     
     def _check_allowed_tables(self, parsed: exp.Select, allowed_tables: List[str]):
         """Check that only allowed tables are referenced"""

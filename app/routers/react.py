@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -57,7 +57,7 @@ class ExecutionResultModel(BaseModel):
 
 
 class ReactResponse(BaseModel):
-    status: Literal["completed", "needs_user_input"]
+    status: Literal["completed", "needs_user_input", "await_step_confirmation"]
     final_sql: Optional[str] = None
     validated_sql: Optional[str] = None
     execution_result: Optional[ExecutionResultModel] = None
@@ -78,6 +78,12 @@ class ReactRequest(BaseModel):
     max_iterations: Optional[int] = Field(default=None, ge=1, le=20)
     session_state: Optional[str] = Field(default=None, description="이전 세션 상태 토큰")
     user_response: Optional[str] = Field(default=None, description="ask_user 툴에 대한 사용자 응답")
+    step_confirmation_mode: Optional[bool] = Field(
+        default=None, description="각 스텝마다 사용자 확인을 요구하는 interrupt 모드"
+    )
+    step_confirmation_response: Optional[Literal["continue"]] = Field(
+        default=None, description="step confirmation 상태에서 재개 응답"
+    )
 
 
 def _step_to_model(step: ReactStep) -> ReactStepModel:
@@ -103,13 +109,28 @@ def _step_to_model(step: ReactStep) -> ReactStepModel:
 
 def _ensure_state_from_request(request: ReactRequest) -> ReactSessionState:
     if request.session_state:
-        return ReactSessionState.from_token(request.session_state)
-    dbms = request.dbms or settings.target_db_type
-    return ReactSessionState.new(
-        user_query=request.question,
-        dbms=dbms,
-        remaining_tool_calls=request.max_tool_calls,
-    )
+        state = ReactSessionState.from_token(request.session_state)
+    else:
+        dbms = request.dbms or settings.target_db_type
+        state = ReactSessionState.new(
+            user_query=request.question,
+            dbms=dbms,
+            remaining_tool_calls=request.max_tool_calls,
+            step_confirmation_mode=request.step_confirmation_mode or False,
+        )
+
+    if request.step_confirmation_mode is not None:
+        state.step_confirmation_mode = request.step_confirmation_mode
+
+    if state.awaiting_step_confirmation:
+        if request.step_confirmation_response == "continue":
+            state.awaiting_step_confirmation = False
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Step confirmation response required to continue.",
+            )
+    return state
 
 
 @router.post("", response_class=StreamingResponse)
@@ -151,6 +172,39 @@ async def run_react(
                         "state": event["state"],
                     }
                     yield json.dumps(payload, ensure_ascii=False) + "\n"
+
+                    requires_step_confirmation = (
+                        state.step_confirmation_mode
+                        and step_model.tool_call.name not in {"submit_sql", "ask_user"}
+                    )
+
+                    if requires_step_confirmation:
+                        state_snapshot_dict = event.get("state") or state.to_dict()
+                        state.awaiting_step_confirmation = True
+                        state_snapshot = ReactSessionState.from_dict(state_snapshot_dict)
+                        state_snapshot.awaiting_step_confirmation = True
+                        session_token = state_snapshot.to_token()
+                        question = (
+                            f"Iteration {step_model.iteration} 결과까지 확인했습니다. "
+                            "다음 스텝으로 진행하시겠습니까?"
+                        )
+                        response_payload = ReactResponse(
+                            status="await_step_confirmation",
+                            steps=steps,
+                            collected_metadata=state_snapshot.metadata.to_xml(),
+                            partial_sql=state_snapshot.partial_sql,
+                            remaining_tool_calls=state_snapshot.remaining_tool_calls,
+                            session_state=session_token,
+                            question_to_user=question,
+                            warnings=None,
+                        )
+                        confirmation_payload = {
+                            "event": "step_confirmation",
+                            "response": response_payload.model_dump(),
+                            "state": event["state"],
+                        }
+                        yield json.dumps(confirmation_payload, ensure_ascii=False) + "\n"
+                        return
                     continue
 
                 if event_type == "outcome":

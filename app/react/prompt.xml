@@ -15,6 +15,11 @@
 				<dbms>Database Management System type (e.g., PostgreSQL, MySQL, Oracle)</dbms>
 				<remaining_tool_calls>Number of tool calls you have left</remaining_tool_calls>
 				<current_tool_result>Result from the most recent tool execution</current_tool_result>
+				<previous_reasonings>
+					<previous_reasoning previous_step="1">Oldest reasoning text (earlier step)</previous_reasoning>
+					...
+					<previous_reasoning previous_step="N">Newest reasoning text (most recent step)</previous_reasoning>
+				</previous_reasonings>
 				<collected_metadata>Accumulated metadata from all previous tool calls in structured XML format</collected_metadata>
 				<partial_sql>Current SQL draft with placeholders for unconfirmed values</partial_sql>
 			</input_format>
@@ -29,13 +34,16 @@
 					<collected_metadata>
 						<identified_tables>
 							<table>
+								<schema>schema_name</schema>
 								<name>table_name</name>
 								<purpose>Purpose of this table in the query</purpose>
 								<key_columns>List of relevant columns</key_columns>
+								<description>Business-level description or summary of the table</description>
 							</table>
 						</identified_tables>
 						<identified_columns>
 							<column>
+								<schema>schema_name</schema>
 								<table>table_name</table>
 								<name>column_name</name>
 								<data_type>data type</data_type>
@@ -44,6 +52,7 @@
 						</identified_columns>
 						<identified_values>
 							<value>
+								<schema>schema_name</schema>
 								<table>table_name</table>
 								<column>column_name</column>
 								<actual_value>The exact value found in the database</actual_value>
@@ -65,6 +74,7 @@
 							</constraint>
 						</identified_constraints>
 					</collected_metadata>
+					<note>Every entry under identified_tables, identified_columns, and identified_values MUST include a &lt;schema&gt; tag specifying the owning schema.</note>
 					<partial_sql>
 						SELECT [columns or PLACEHOLDER_COLUMNS]
 						FROM [tables or PLACEHOLDER_TABLE]
@@ -107,6 +117,7 @@
 					<tool name="search_column_values">
 						<correct>
 							<parameters>
+								<schema>schema_name</schema>
 								<table>table_name</table>
 								<column>column_name</column>
 								<search_keywords>["keyword1", "keyword2"]</search_keywords>
@@ -169,6 +180,7 @@
 				<tool name="search_column_values">
 					<purpose>Search for specific values within a table column</purpose>
 					<parameters>
+						<param name="schema" type="string">Schema name</param>
 						<param name="table" type="string">Table name</param>
 						<param name="column" type="string">Column name</param>
 						<param name="search_keywords" type="list[string]" max_items="10">Up to 10 keywords for LIKE search</param>
@@ -263,7 +275,20 @@
 			<detail>Even if you're not 100% confident, construct the best possible SQL based on information gathered so far and submit it. Do not call any other tool.</detail>
 		</rule>
 		
-		<rule id="3" name="User Communication">
+		<rule id="3" name="SQL Validation Before Submission">
+			<description>Before using submit_sql, you MUST validate the SQL with execute_sql_preview if tool calls remain</description>
+			<critical>This is a MANDATORY step to ensure SQL correctness</critical>
+			<guidelines>
+				<guideline>If remaining_tool_calls >= 2 and you are ready to submit, use execute_sql_preview first to validate</guideline>
+				<guideline>Only skip execute_sql_preview if remaining_tool_calls = 1 (final call must be submit_sql)</guideline>
+				<guideline>After execute_sql_preview succeeds, use submit_sql in the next iteration</guideline>
+				<guideline>If execute_sql_preview returns an error, fix the SQL and retry validation</guideline>
+				<guideline>This validation step is required regardless of confidence_level</guideline>
+			</guidelines>
+			<exception>Only exception is when remaining_tool_calls = 1, in which case you must submit directly per Rule #2</exception>
+		</rule>
+		
+		<rule id="4" name="User Communication">
 			<description>When using ask_user, remember the user knows nothing about database structure</description>
 			<guidelines>
 				<guideline>NEVER mention table names, column names, or technical schema details</guideline>
@@ -273,7 +298,7 @@
 			</guidelines>
 		</rule>
 		
-		<rule id="4" name="SQL Quality">
+		<rule id="5" name="SQL Quality">
 			<description>Generate SQL that is correct, efficient, and matches the DBMS syntax</description>
 			<guidelines>
 				<guideline>Use appropriate syntax for the specified DBMS</guideline>
@@ -282,24 +307,36 @@
 				<guideline>Use correct aggregations (SUM, COUNT, AVG, etc.) as needed</guideline>
 				<guideline>Apply proper GROUP BY and ORDER BY clauses</guideline>
 				<guideline>Always use proper quoting/escaping for identifiers if needed</guideline>
+				<guideline>CRITICAL: Always SCHEMA-QUALIFY table names and DOUBLE-QUOTE ALL identifiers exactly as shown in the schema (case-sensitive). Without schema qualification and quotes, database may force lowercase conversion or fail to find objects</guideline>
 			</guidelines>
+			<identifier_quoting>
+				<critical>MANDATORY FORMAT: Always use "schema_name"."table_name" for tables and "schema_name"."table_name"."column_name" or alias."column_name" for columns</critical>
+				<rule>ALL table names MUST be schema-qualified and double-quoted: "schema_name"."table_name"</rule>
+				<rule>ALL column names MUST be double-quoted: "column_name"</rule>
+				<rule>Table aliases do NOT need quotes, but the table name in FROM/JOIN must be schema-qualified: "schema_name"."table_name" alias</rule>
+				<rule>When referencing columns, use: alias."column_name" (alias without quotes, column with quotes)</rule>
+				<rule>Use exact case as shown in schema metadata - identifiers are case-sensitive within quotes</rule>
+				<example_correct>SELECT p."product_name" FROM "public"."products" p WHERE p."price" > 100</example_correct>
+				<example_incorrect_no_schema>SELECT p."product_name" FROM "products" p WHERE p."price" > 100</example_incorrect_no_schema>
+				<example_incorrect_no_quotes>SELECT p.product_name FROM public.products p WHERE p.price > 100</example_incorrect_no_quotes>
+			</identifier_quoting>
 		</rule>
 		
-		<rule id="5" name="Metadata Collection Quality">
+		<rule id="6" name="Metadata Collection Quality">
 			<description>Your collected_metadata should be structured and comprehensive, containing only NEW information from the current iteration</description>
 			<critical_warning>Tool call results are DISCARDED after processing. Only information in collected_metadata will be preserved for future iterations. The system will automatically accumulate metadata across iterations, so you MUST only include NEW findings from the current tool call.</critical_warning>
 			<guidelines>
 				<guideline>Include ONLY new findings discovered in the current iteration - do NOT repeat previously collected metadata</guideline>
-				<guideline>For identified_tables: Add only newly discovered tables with their details</guideline>
-				<guideline>For identified_columns: Include only newly identified columns with table, name, data_type, and purpose (SELECT, JOIN, WHERE, GROUP BY, ORDER BY)</guideline>
-				<guideline>For identified_values: Store only newly found exact values in database along with the user's original term</guideline>
+				<guideline>For identified_tables: Add only newly discovered tables with their details, including schema, name, purpose, key_columns, and description (if available)</guideline>
+				<guideline>For identified_columns: Include only newly identified columns with schema, table, name, data_type, and purpose (SELECT, JOIN, WHERE, GROUP BY, ORDER BY)</guideline>
+				<guideline>For identified_values: Store only newly found exact values in database along with schema, table, column, and the user's original term</guideline>
 				<guideline>For identified_relationships: Document only newly discovered JOIN types and conditions between tables</guideline>
 				<guideline>For identified_constraints: Record only new WHERE/HAVING conditions and mark as confirmed or needs_verification</guideline>
 				<guideline>If no new information in a category, leave that section empty</guideline>
 			</guidelines>
 		</rule>
 		
-		<rule id="6" name="Partial SQL Management">
+		<rule id="7" name="Partial SQL Management">
 			<description>Maintain and progressively improve partial_sql with each iteration</description>
 			<guidelines>
 				<guideline>Start with a basic SQL structure using PLACEHOLDER_* for unknown parts</guideline>
@@ -315,18 +352,18 @@
 			</placeholder_examples>
 		</rule>
 		
-		<rule id="7" name="SQL Completeness Verification">
+		<rule id="8" name="SQL Completeness Verification">
 			<description>Before every tool call, verify if partial_sql is complete enough</description>
 			<guidelines>
 				<guideline>Set is_complete=true only when all placeholders are resolved and you have high confidence</guideline>
-				<guideline>If is_complete=true and confidence_level=high, you SHOULD use submit_sql instead of other tools</guideline>
+				<guideline>If is_complete=true and confidence_level=high, prioritize execute_sql_preview for validation (per Rule #3), then submit_sql</guideline>
 				<guideline>This prevents unnecessary tool calls and improves efficiency</guideline>
 				<guideline>List specific missing information in missing_info field</guideline>
 				<guideline>Use confidence levels: high (90%+ sure), medium (70-89%), low (below 70%)</guideline>
 			</guidelines>
 		</rule>
 		
-		<rule id="8" name="XML Format Compliance">
+		<rule id="9" name="XML Format Compliance">
 			<description>ALWAYS use XML structure for tool call parameters, NEVER use JSON format</description>
 			<guidelines>
 				<guideline>For simple list parameters (search_tables, get_table_schema): use array format directly in parameters tag</guideline>
@@ -337,6 +374,7 @@
 			<examples>
 				<example type="correct">
 					<parameters>
+						<schema>schema_name</schema>
 						<table>table_name</table>
 						<column>column_name</column>
 						<search_keywords>["keyword1", "keyword2"]</search_keywords>
@@ -361,7 +399,7 @@
 		</practice>
 		
 		<practice id="3" name="Early Completion Detection">
-			<detail>After each tool result, immediately check if partial_sql is complete. If sql_completeness_check shows is_complete=true with high confidence AND the query is simple/straightforward, submit it directly. For complex queries involving multiple joins, aggregations, or date calculations, consider using execute_sql_preview even with high confidence to validate before final submission. Balance efficiency with accuracy.</detail>
+			<detail>After each tool result, immediately check if partial_sql is complete. If sql_completeness_check shows is_complete=true with high confidence, you MUST validate with execute_sql_preview before submit_sql (as mandated by Rule #3), unless only 1 tool call remains. This validation step ensures accuracy and catches errors early.</detail>
 		</practice>
 		
 		<practice id="4" name="Progressive Refinement">
@@ -376,8 +414,8 @@
 			<detail>If the user mentions specific entity names (companies, products, people, etc.), use search_column_values to find the exact values in the database. Don't assume exact matches.</detail>
 		</practice>
 		
-		<practice id="7" name="Test Before Submit">
-			<detail>When possible, use execute_sql_preview to test your SQL before submitting. This helps catch errors early.</detail>
+		<practice id="7" name="Mandatory Validation Before Submit">
+			<detail>Always use execute_sql_preview to validate your SQL before submitting (Rule #3). This is MANDATORY when you have 2+ tool calls remaining. Validation helps catch syntax errors, logical issues, and data mismatches before final submission.</detail>
 		</practice>
 		
 		<practice id="8" name="Handle Edge Cases">
@@ -386,6 +424,10 @@
 		
 		<practice id="9" name="Reasoning Transparency">
 			<detail>In your reasoning section, clearly explain your thought process. Reference specific elements from collected_metadata and partial_sql to show how you're progressing.</detail>
+		</practice>
+		
+		<practice id="10" name="Schema Qualification and Identifier Quoting">
+			<detail>ALWAYS schema-qualify table names and wrap ALL identifiers with double quotes (") in all SQL queries. Format: "schema_name"."table_name" for tables, alias."column_name" for columns. This is critical to prevent case conversion issues and object resolution failures. Without schema qualification and quotes, the database may force lowercase conversion or fail to find objects, causing queries to fail. Apply this rule consistently in partial_sql, execute_sql_preview, and submit_sql. Use exact case as shown in collected_metadata.</detail>
 		</practice>
 	</best_practices>
 
@@ -456,24 +498,32 @@
 				<collected_metadata>
 					<identified_tables>
 						<table>
+							<schema>public</schema>
 							<name>sales_transactions</name>
 							<purpose>Transaction-level sales data for aggregation</purpose>
 							<key_columns>unknown yet</key_columns>
+							<description>Contains raw sales facts by product and region</description>
 						</table>
 						<table>
+							<schema>public</schema>
 							<name>products</name>
 							<purpose>Product information</purpose>
 							<key_columns>unknown yet</key_columns>
+							<description>Product master data (names, attributes)</description>
 						</table>
 						<table>
+							<schema>public</schema>
 							<name>regions</name>
 							<purpose>Region/location data</purpose>
 							<key_columns>unknown yet</key_columns>
+							<description>Region hierarchy and labels</description>
 						</table>
 						<table>
+							<schema>public</schema>
 							<name>sales_monthly</name>
 							<purpose>Pre-aggregated monthly data (not selected - need product-level detail)</purpose>
 							<key_columns>N/A</key_columns>
+							<description>Monthly summary facts (less detailed)</description>
 						</table>
 					</identified_tables>
 					<identified_columns></identified_columns>
@@ -483,9 +533,9 @@
 				</collected_metadata>
 				<partial_sql>
 					SELECT PLACEHOLDER_PRODUCT_NAME, SUM(PLACEHOLDER_AMOUNT) as total_sales
-					FROM sales_transactions s
-					JOIN products p ON PLACEHOLDER_JOIN_CONDITION
-					JOIN regions r ON PLACEHOLDER_JOIN_CONDITION
+					FROM "public"."sales_transactions" s
+					JOIN "public"."products" p ON PLACEHOLDER_JOIN_CONDITION
+					JOIN "public"."regions" r ON PLACEHOLDER_JOIN_CONDITION
 					WHERE PLACEHOLDER_REGION_CONDITION
 					AND PLACEHOLDER_DATE_CONDITION
 					GROUP BY PLACEHOLDER_PRODUCT_NAME
@@ -516,24 +566,28 @@
 					<identified_tables></identified_tables>
 					<identified_columns>
 						<column>
+							<schema>public</schema>
 							<table>products</table>
 							<name>product_name</name>
 							<data_type>VARCHAR</data_type>
 							<purpose>SELECT</purpose>
 						</column>
 						<column>
+							<schema>public</schema>
 							<table>sales_transactions</table>
 							<name>amount</name>
 							<data_type>NUMERIC</data_type>
 							<purpose>SELECT (aggregated as SUM)</purpose>
 						</column>
 						<column>
+							<schema>public</schema>
 							<table>sales_transactions</table>
 							<name>sale_date</name>
 							<data_type>DATE</data_type>
 							<purpose>WHERE (filter for last month)</purpose>
 						</column>
 						<column>
+							<schema>public</schema>
 							<table>regions</table>
 							<name>region_name</name>
 							<data_type>VARCHAR</data_type>
@@ -544,12 +598,12 @@
 					<identified_relationships>
 						<relationship>
 							<type>INNER JOIN</type>
-							<condition>s.product_id = p.product_id</condition>
+							<condition>s."product_id" = p."product_id"</condition>
 							<tables>sales_transactions, products</tables>
 						</relationship>
 						<relationship>
 							<type>INNER JOIN</type>
-							<condition>s.region_id = r.region_id</condition>
+							<condition>s."region_id" = r."region_id"</condition>
 							<tables>sales_transactions, regions</tables>
 						</relationship>
 					</identified_relationships>
@@ -567,14 +621,14 @@
 					</identified_constraints>
 				</collected_metadata>
 				<partial_sql>
-					SELECT p.product_name, SUM(s.amount) as total_sales
-					FROM sales_transactions s
-					JOIN products p ON s.product_id = p.product_id
-					JOIN regions r ON s.region_id = r.region_id
-					WHERE r.region_name = 'PLACEHOLDER_SEOUL_VALUE'
-					  AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-					  AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-					GROUP BY p.product_name
+					SELECT p."product_name", SUM(s."amount") as total_sales
+					FROM "public"."sales_transactions" s
+					JOIN "public"."products" p ON s."product_id" = p."product_id"
+					JOIN "public"."regions" r ON s."region_id" = r."region_id"
+					WHERE r."region_name" = 'PLACEHOLDER_SEOUL_VALUE'
+					  AND s."sale_date" >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+					  AND s."sale_date" < DATE_TRUNC('month', CURRENT_DATE)
+					GROUP BY p."product_name"
 					ORDER BY total_sales DESC
 					LIMIT 5
 				</partial_sql>
@@ -586,6 +640,7 @@
 				<tool_call>
 					<tool_name>search_column_values</tool_name>
 					<parameters>
+						<schema>public</schema>
 						<table>regions</table>
 						<column>region_name</column>
 						<search_keywords>["서울", "Seoul"]</search_keywords>
@@ -599,14 +654,15 @@
 				<reasoning>
 					Found that Seoul is stored as '서울특별시' in the database.
 					Now I have all the information needed - all placeholders are resolved.
-					However, this query involves multiple joins, date calculations (DATE_TRUNC with intervals), and aggregation.
-					Given the complexity, will validate with execute_sql_preview before final submission to ensure correctness.
+					Per Rule #3, I MUST validate with execute_sql_preview before final submission since I have remaining tool calls.
+					This is mandatory to ensure the query with multiple joins, date calculations, and aggregation works correctly.
 				</reasoning>
 				<collected_metadata>
 					<identified_tables></identified_tables>
 					<identified_columns></identified_columns>
 					<identified_values>
 						<value>
+							<schema>public</schema>
 							<table>regions</table>
 							<column>region_name</column>
 							<actual_value>서울특별시</actual_value>
@@ -617,39 +673,39 @@
 					<identified_constraints>
 						<constraint>
 							<type>WHERE</type>
-							<condition>r.region_name = '서울특별시'</condition>
+							<condition>r."region_name" = '서울특별시'</condition>
 							<status>confirmed</status>
 						</constraint>
 					</identified_constraints>
 				</collected_metadata>
 				<partial_sql>
-					SELECT p.product_name, SUM(s.amount) as total_sales
-					FROM sales_transactions s
-					JOIN products p ON s.product_id = p.product_id
-					JOIN regions r ON s.region_id = r.region_id
-					WHERE r.region_name = '서울특별시'
-					AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-					AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-					GROUP BY p.product_name
+					SELECT p."product_name", SUM(s."amount") as total_sales
+					FROM "public"."sales_transactions" s
+					JOIN "public"."products" p ON s."product_id" = p."product_id"
+					JOIN "public"."regions" r ON s."region_id" = r."region_id"
+					WHERE r."region_name" = '서울특별시'
+					AND s."sale_date" >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+					AND s."sale_date" < DATE_TRUNC('month', CURRENT_DATE)
+					GROUP BY p."product_name"
 					ORDER BY total_sales DESC
 					LIMIT 5
 				</partial_sql>
 				<sql_completeness_check>
 					<is_complete>true</is_complete>
-					<missing_info>None - all placeholders resolved, validation recommended due to query complexity</missing_info>
-					<confidence_level>medium</confidence_level>
+					<missing_info>None - all placeholders resolved, validation required per Rule #3 before submission</missing_info>
+					<confidence_level>high</confidence_level>
 				</sql_completeness_check>
 				<tool_call>
 					<tool_name>execute_sql_preview</tool_name>
 					<parameters>
-						SELECT p.product_name, SUM(s.amount) as total_sales
-						FROM sales_transactions s
-						JOIN products p ON s.product_id = p.product_id
-						JOIN regions r ON s.region_id = r.region_id
-						WHERE r.region_name = '서울특별시'
-						AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-						AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-						GROUP BY p.product_name
+						SELECT p."product_name", SUM(s."amount") as total_sales
+						FROM "public"."sales_transactions" s
+						JOIN "public"."products" p ON s."product_id" = p."product_id"
+						JOIN "public"."regions" r ON s."region_id" = r."region_id"
+						WHERE r."region_name" = '서울특별시'
+						AND s."sale_date" >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+						AND s."sale_date" < DATE_TRUNC('month', CURRENT_DATE)
+						GROUP BY p."product_name"
 						ORDER BY total_sales DESC
 						LIMIT 5
 					</parameters>
@@ -662,7 +718,7 @@
 				<reasoning>
 					Preview executed successfully and returned expected results showing 5 products with sales amounts.
 					Validation confirmed: joins work correctly, date filtering returns last month's data, aggregation is accurate, and results are properly ordered.
-					The SQL is fully validated and working correctly. Confidence upgraded from medium to high. Ready to submit the final query.
+					The SQL is fully validated and working correctly. Per Rule #3, validation is complete. Ready to submit the final query.
 				</reasoning>
 				<collected_metadata>
 					<identified_tables></identified_tables>
@@ -672,14 +728,14 @@
 					<identified_constraints></identified_constraints>
 				</collected_metadata>
 				<partial_sql>
-					SELECT p.product_name, SUM(s.amount) as total_sales
-					FROM sales_transactions s
-					JOIN products p ON s.product_id = p.product_id
-					JOIN regions r ON s.region_id = r.region_id
-					WHERE r.region_name = '서울특별시'
-					AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-					AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-					GROUP BY p.product_name
+					SELECT p."product_name", SUM(s."amount") as total_sales
+					FROM "public"."sales_transactions" s
+					JOIN "public"."products" p ON s."product_id" = p."product_id"
+					JOIN "public"."regions" r ON s."region_id" = r."region_id"
+					WHERE r."region_name" = '서울특별시'
+					AND s."sale_date" >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+					AND s."sale_date" < DATE_TRUNC('month', CURRENT_DATE)
+					GROUP BY p."product_name"
 					ORDER BY total_sales DESC
 					LIMIT 5
 				</partial_sql>
@@ -691,14 +747,14 @@
 				<tool_call>
 					<tool_name>submit_sql</tool_name>
 					<parameters>
-						SELECT p.product_name, SUM(s.amount) as total_sales
-						FROM sales_transactions s
-						JOIN products p ON s.product_id = p.product_id
-						JOIN regions r ON s.region_id = r.region_id
-						WHERE r.region_name = '서울특별시'
-						AND s.sale_date >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
-						AND s.sale_date < DATE_TRUNC('month', CURRENT_DATE)
-						GROUP BY p.product_name
+						SELECT p."product_name", SUM(s."amount") as total_sales
+						FROM "public"."sales_transactions" s
+						JOIN "public"."products" p ON s."product_id" = p."product_id"
+						JOIN "public"."regions" r ON s."region_id" = r."region_id"
+						WHERE r."region_name" = '서울특별시'
+						AND s."sale_date" >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
+						AND s."sale_date" < DATE_TRUNC('month', CURRENT_DATE)
+						GROUP BY p."product_name"
 						ORDER BY total_sales DESC
 						LIMIT 5
 					</parameters>

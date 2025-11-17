@@ -1,4 +1,4 @@
-# python -m pytest app/tests/datas/test_react_metadata.py -v
+# python -m pytest app/tests/models/test_react_metadata.py -v
 
 import pytest
 import xml.etree.ElementTree as ET
@@ -20,8 +20,24 @@ class TestReactMetadataInitialization:
 
     def test_initialization_with_data(self):
         """데이터를 포함한 초기화"""
-        tables = [{"name": "users", "purpose": "store users", "key_columns": "id"}]
-        columns = [{"table": "users", "name": "email", "data_type": "varchar", "purpose": "user email"}]
+        tables = [
+            {
+                "schema": "public",
+                "name": "users",
+                "purpose": "store users",
+                "key_columns": "id",
+                "description": "basic user info",
+            }
+        ]
+        columns = [
+            {
+                "schema": "public",
+                "table": "users",
+                "name": "email",
+                "data_type": "varchar",
+                "purpose": "user email",
+            }
+        ]
         
         metadata = ReactMetadata(
             identified_tables=tables,
@@ -49,14 +65,18 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema>public</schema>
                     <name>users</name>
                     <purpose>사용자 정보 저장</purpose>
                     <key_columns>user_id</key_columns>
+                    <description>사용자 기본 정보</description>
                 </table>
                 <table>
+                    <schema>public</schema>
                     <name>orders</name>
                     <purpose>주문 정보 저장</purpose>
                     <key_columns>order_id</key_columns>
+                    <description>주문 상세 정보</description>
                 </table>
             </identified_tables>
         </metadata>
@@ -67,8 +87,12 @@ class TestReactMetadataUpdateFromXml:
         
         assert len(metadata.identified_tables) == 2
         assert metadata.identified_tables[0]["name"] == "users"
+        assert metadata.identified_tables[0]["schema"] == "public"
         assert metadata.identified_tables[0]["purpose"] == "사용자 정보 저장"
+        assert metadata.identified_tables[0]["description"] == "사용자 기본 정보"
         assert metadata.identified_tables[1]["name"] == "orders"
+        assert metadata.identified_tables[1]["schema"] == "public"
+        assert metadata.identified_tables[1]["description"] == "주문 상세 정보"
 
     def test_update_from_xml_with_columns(self):
         """컬럼 정보가 포함된 XML 파싱"""
@@ -76,6 +100,7 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_columns>
                 <column>
+                    <schema>public</schema>
                     <table>users</table>
                     <name>email</name>
                     <data_type>VARCHAR(255)</data_type>
@@ -89,6 +114,7 @@ class TestReactMetadataUpdateFromXml:
         metadata.update_from_xml(xml_str)
         
         assert len(metadata.identified_columns) == 1
+        assert metadata.identified_columns[0]["schema"] == "public"
         assert metadata.identified_columns[0]["table"] == "users"
         assert metadata.identified_columns[0]["name"] == "email"
         assert metadata.identified_columns[0]["data_type"] == "VARCHAR(255)"
@@ -99,6 +125,7 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_values>
                 <value>
+                    <schema>public</schema>
                     <table>products</table>
                     <column>status</column>
                     <actual_value>active</actual_value>
@@ -112,6 +139,7 @@ class TestReactMetadataUpdateFromXml:
         metadata.update_from_xml(xml_str)
         
         assert len(metadata.identified_values) == 1
+        assert metadata.identified_values[0]["schema"] == "public"
         assert metadata.identified_values[0]["table"] == "products"
         assert metadata.identified_values[0]["actual_value"] == "active"
         assert metadata.identified_values[0]["user_term"] == "활성"
@@ -164,9 +192,11 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema>public</schema>
                     <name>table1</name>
                     <purpose>purpose1</purpose>
                     <key_columns>id</key_columns>
+                    <description>desc1</description>
                 </table>
             </identified_tables>
         </metadata>
@@ -176,9 +206,11 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema>public</schema>
                     <name>table2</name>
                     <purpose>purpose2</purpose>
                     <key_columns>id</key_columns>
+                    <description>desc2</description>
                 </table>
             </identified_tables>
         </metadata>
@@ -190,7 +222,11 @@ class TestReactMetadataUpdateFromXml:
         
         assert len(metadata.identified_tables) == 2
         assert metadata.identified_tables[0]["name"] == "table1"
+        assert metadata.identified_tables[0]["schema"] == "public"
+        assert metadata.identified_tables[0]["description"] == "desc1"
         assert metadata.identified_tables[1]["name"] == "table2"
+        assert metadata.identified_tables[1]["schema"] == "public"
+        assert metadata.identified_tables[1]["description"] == "desc2"
 
     def test_update_from_xml_skips_empty_entries(self):
         """빈 엔트리는 건너뛰어야 함"""
@@ -198,14 +234,18 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema></schema>
                     <name></name>
                     <purpose></purpose>
                     <key_columns></key_columns>
+                    <description></description>
                 </table>
                 <table>
+                    <schema>public</schema>
                     <name>users</name>
                     <purpose>store users</purpose>
                     <key_columns>id</key_columns>
+                    <description>user store</description>
                 </table>
             </identified_tables>
         </metadata>
@@ -217,6 +257,8 @@ class TestReactMetadataUpdateFromXml:
         # 모든 필드가 비어있는 첫 번째 엔트리는 건너뛰고, 두 번째만 추가
         assert len(metadata.identified_tables) == 1
         assert metadata.identified_tables[0]["name"] == "users"
+        assert metadata.identified_tables[0]["schema"] == "public"
+        assert metadata.identified_tables[0]["description"] == "user store"
 
     def test_update_from_xml_handles_whitespace(self):
         """공백 문자 처리"""
@@ -224,9 +266,11 @@ class TestReactMetadataUpdateFromXml:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema>  public  </schema>
                     <name>  users  </name>
                     <purpose>  store users  </purpose>
                     <key_columns>  id  </key_columns>
+                    <description>  설명  </description>
                 </table>
             </identified_tables>
         </metadata>
@@ -236,9 +280,11 @@ class TestReactMetadataUpdateFromXml:
         metadata.update_from_xml(xml_str)
         
         # strip() 처리가 되어야 함
+        assert metadata.identified_tables[0]["schema"] == "public"
         assert metadata.identified_tables[0]["name"] == "users"
         assert metadata.identified_tables[0]["purpose"] == "store users"
         assert metadata.identified_tables[0]["key_columns"] == "id"
+        assert metadata.identified_tables[0]["description"] == "설명"
 
     def test_update_from_invalid_xml_raises_error(self):
         """잘못된 XML은 MetadataParseError를 발생시켜야 함"""
@@ -268,8 +314,10 @@ class TestReactMetadataUpdateFromXml:
         
         assert len(metadata.identified_tables) == 1
         assert metadata.identified_tables[0]["name"] == "users"
+        assert metadata.identified_tables[0]["schema"] == ""
         assert metadata.identified_tables[0]["purpose"] == ""
         assert metadata.identified_tables[0]["key_columns"] == ""
+        assert metadata.identified_tables[0]["description"] == ""
 
 
 class TestReactMetadataToXml:
@@ -289,7 +337,13 @@ class TestReactMetadataToXml:
         """테이블 정보를 XML로 변환"""
         metadata = ReactMetadata(
             identified_tables=[
-                {"name": "users", "purpose": "사용자 저장", "key_columns": "id"}
+                {
+                    "schema": "public",
+                    "name": "users",
+                    "purpose": "사용자 저장",
+                    "key_columns": "id",
+                    "description": "사용자 테이블",
+                }
             ]
         )
         xml_str = metadata.to_xml()
@@ -298,16 +352,42 @@ class TestReactMetadataToXml:
         tables = root.find("identified_tables")
         table = tables.find("table")
         
+        assert table.findtext("schema") == "public"
         assert table.findtext("name") == "users"
         assert table.findtext("purpose") == "사용자 저장"
         assert table.findtext("key_columns") == "id"
+        assert table.findtext("description") == "사용자 테이블"
 
     def test_to_xml_with_all_fields(self):
         """모든 필드가 포함된 XML 생성"""
         metadata = ReactMetadata(
-            identified_tables=[{"name": "users", "purpose": "test", "key_columns": "id"}],
-            identified_columns=[{"table": "users", "name": "email", "data_type": "varchar", "purpose": "email"}],
-            identified_values=[{"table": "users", "column": "status", "actual_value": "active", "user_term": "활성"}],
+            identified_tables=[
+                {
+                    "schema": "public",
+                    "name": "users",
+                    "purpose": "test",
+                    "key_columns": "id",
+                    "description": "desc",
+                }
+            ],
+            identified_columns=[
+                {
+                    "schema": "public",
+                    "table": "users",
+                    "name": "email",
+                    "data_type": "varchar",
+                    "purpose": "email",
+                }
+            ],
+            identified_values=[
+                {
+                    "schema": "public",
+                    "table": "users",
+                    "column": "status",
+                    "actual_value": "active",
+                    "user_term": "활성",
+                }
+            ],
             identified_relationships=[{"type": "fk", "condition": "a=b", "tables": "t1,t2"}],
             identified_constraints=[{"type": "date", "condition": "d>1", "status": "req"}],
         )
@@ -337,7 +417,15 @@ class TestReactMetadataDictConversion:
 
     def test_to_dict_with_data(self):
         """데이터가 있는 메타데이터를 딕셔너리로 변환"""
-        tables = [{"name": "users", "purpose": "test", "key_columns": "id"}]
+        tables = [
+            {
+                "schema": "public",
+                "name": "users",
+                "purpose": "test",
+                "key_columns": "id",
+                "description": "desc",
+            }
+        ]
         metadata = ReactMetadata(identified_tables=tables)
         data = metadata.to_dict()
         
@@ -358,8 +446,24 @@ class TestReactMetadataDictConversion:
     def test_from_dict_with_data(self):
         """데이터가 있는 딕셔너리에서 생성"""
         data = {
-            "identified_tables": [{"name": "users", "purpose": "test", "key_columns": "id"}],
-            "identified_columns": [{"table": "users", "name": "email", "data_type": "varchar", "purpose": "test"}],
+            "identified_tables": [
+                {
+                    "schema": "public",
+                    "name": "users",
+                    "purpose": "test",
+                    "key_columns": "id",
+                    "description": "desc",
+                }
+            ],
+            "identified_columns": [
+                {
+                    "schema": "public",
+                    "table": "users",
+                    "name": "email",
+                    "data_type": "varchar",
+                    "purpose": "test",
+                }
+            ],
         }
         metadata = ReactMetadata.from_dict(data)
         
@@ -370,8 +474,24 @@ class TestReactMetadataDictConversion:
     def test_round_trip_to_dict_from_dict(self):
         """to_dict -> from_dict 왕복 변환"""
         original = ReactMetadata(
-            identified_tables=[{"name": "users", "purpose": "사용자", "key_columns": "id"}],
-            identified_values=[{"table": "products", "column": "status", "actual_value": "active", "user_term": "활성"}],
+            identified_tables=[
+                {
+                    "schema": "public",
+                    "name": "users",
+                    "purpose": "사용자",
+                    "key_columns": "id",
+                    "description": "desc",
+                }
+            ],
+            identified_values=[
+                {
+                    "schema": "public",
+                    "table": "products",
+                    "column": "status",
+                    "actual_value": "active",
+                    "user_term": "활성",
+                }
+            ],
         )
         
         data = original.to_dict()
@@ -389,11 +509,29 @@ class TestReactMetadataComplexScenarios:
         """XML 생성 후 파싱하여 데이터 복원"""
         original = ReactMetadata(
             identified_tables=[
-                {"name": "users", "purpose": "사용자 정보", "key_columns": "user_id"},
-                {"name": "orders", "purpose": "주문 정보", "key_columns": "order_id"},
+                {
+                    "schema": "public",
+                    "name": "users",
+                    "purpose": "사용자 정보",
+                    "key_columns": "user_id",
+                    "description": "users table",
+                },
+                {
+                    "schema": "public",
+                    "name": "orders",
+                    "purpose": "주문 정보",
+                    "key_columns": "order_id",
+                    "description": "orders table",
+                },
             ],
             identified_columns=[
-                {"table": "users", "name": "email", "data_type": "VARCHAR", "purpose": "이메일"},
+                {
+                    "schema": "public",
+                    "table": "users",
+                    "name": "email",
+                    "data_type": "VARCHAR",
+                    "purpose": "이메일",
+                },
             ],
         )
         
@@ -418,9 +556,11 @@ class TestReactMetadataComplexScenarios:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema>public</schema>
                     <name>users</name>
                     <purpose>test</purpose>
                     <key_columns>id</key_columns>
+                    <description>desc</description>
                 </table>
             </identified_tables>
         </metadata>
@@ -431,6 +571,7 @@ class TestReactMetadataComplexScenarios:
         <metadata>
             <identified_columns>
                 <column>
+                    <schema>public</schema>
                     <table>users</table>
                     <name>email</name>
                     <data_type>varchar</data_type>
@@ -445,6 +586,7 @@ class TestReactMetadataComplexScenarios:
         <metadata>
             <identified_values>
                 <value>
+                    <schema>public</schema>
                     <table>users</table>
                     <column>status</column>
                     <actual_value>active</actual_value>
@@ -468,9 +610,11 @@ class TestReactMetadataComplexScenarios:
         <metadata>
             <identified_tables>
                 <table>
+                    <schema>public</schema>
                     <name>products</name>
                     <purpose>상품 정보</purpose>
                     <key_columns>product_id</key_columns>
+                    <description>product table</description>
                 </table>
             </identified_tables>
         </metadata>
@@ -489,6 +633,8 @@ class TestReactMetadataComplexScenarios:
         # 6. 검증
         tables = root.find("identified_tables")
         table = tables.find("table")
+        assert table.findtext("schema") == "public"
         assert table.findtext("name") == "products"
         assert table.findtext("purpose") == "상품 정보"
+        assert table.findtext("description") == "product table"
 

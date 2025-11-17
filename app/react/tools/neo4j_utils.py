@@ -1,9 +1,49 @@
-from typing import List, Dict
+from typing import List, Dict, Any, Set
 
 from neo4j import AsyncSession
 
 
-async def get_table_relationships(
+RELATIONSHIP_RANKS = {
+    "HAS_COLUMN → FK_TO → HAS_COLUMN": 100,
+}
+DEFAULT_RELATIONSHIP_SCORE = 1
+
+RELATIONSHIP_TYPE_MAP = {
+    "HAS_COLUMN → FK_TO → HAS_COLUMN": "외래키 관계",
+}
+
+
+async def get_table_importance_scores(
+    neo4j_session: AsyncSession,
+) -> Dict[str, Dict[str, Any]]:
+    """Neo4j에서 모든 테이블의 중요도를 미리 계산한다."""
+    query = """
+    MATCH (t:Table)
+    OPTIONAL MATCH (t)-[r]-()
+    WITH t, count(r) AS total_relations
+    RETURN t.name AS table_name,
+           t.schema AS schema,
+           total_relations AS importance_score,
+           t.description AS description
+    ORDER BY importance_score DESC
+    """
+
+    result = await neo4j_session.run(query)
+    records = await result.data()
+
+    importance_map: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        table_name = record["table_name"]
+        importance_map[table_name] = {
+            "schema": record.get("schema"),
+            "description": record.get("description"),
+            "importance_score": record.get("importance_score", 0),
+        }
+
+    return importance_map
+
+
+async def get_table_fk_relationships(
     neo4j_session: AsyncSession,
     table_name: str,
     limit: int,
@@ -15,6 +55,7 @@ async def get_table_relationships(
     query = """
     MATCH (t:Table {name: $table_name})-[:HAS_COLUMN]->(c1:Column)-[fk:FK_TO]->(c2:Column)<-[:HAS_COLUMN]-(t2:Table)
     RETURN DISTINCT t2.name AS related_table,
+           t2.schema AS related_table_schema,
            t2.description AS related_table_description,
            'foreign_key' AS relation_type,
            c1.name AS from_column,
@@ -31,6 +72,7 @@ async def get_table_relationships(
     for record in records:
         rel_info: Dict = {
             "related_table": record["related_table"],
+            "related_table_schema": record.get("related_table_schema"),
             "relation_type": record["relation_type"],
             "from_column": record.get("from_column"),
             "to_column": record.get("to_column"),
@@ -47,6 +89,7 @@ async def get_table_relationships(
         reverse_query = """
         MATCH (t2:Table)-[:HAS_COLUMN]->(c2:Column)-[fk:FK_TO]->(c1:Column)<-[:HAS_COLUMN]-(t:Table {name: $table_name})
         RETURN DISTINCT t2.name AS related_table,
+               t2.schema AS related_table_schema,
                t2.description AS related_table_description,
                'referenced_by' AS relation_type,
                c1.name AS from_column,
@@ -66,6 +109,7 @@ async def get_table_relationships(
         for record in reverse_records:
             rel_info = {
                 "related_table": record["related_table"],
+                "related_table_schema": record.get("related_table_schema"),
                 "relation_type": record["relation_type"],
                 "from_column": record.get("from_column"),
                 "to_column": record.get("to_column"),
@@ -79,6 +123,122 @@ async def get_table_relationships(
             relationships.append(rel_info)
 
     return relationships
+
+
+async def get_table_any_relationships(
+    neo4j_session: AsyncSession,
+    table_name: str,
+) -> List[Dict]:
+    """특정 테이블과 최대 세 단계 이내에 연결된 다양한 관계를 조회한다."""
+    query = """
+    MATCH path = (t1:Table {name: $table_name})-[*1..3]-(t2:Table)
+    WHERE t1 <> t2
+    WITH t2,
+         collect(DISTINCT [rel IN relationships(path) | type(rel)]) AS relationship_paths
+    RETURN t2.name AS related_table,
+           t2.schema AS related_table_schema,
+           COALESCE(t2.comment, t2.description, '설명 없음') AS related_table_description,
+           [path_types IN relationship_paths |
+               REDUCE(
+                   acc = '',
+                   rel IN path_types |
+                   CASE
+                       WHEN acc = '' THEN rel
+                       ELSE acc + ' → ' + rel
+                   END
+               )
+           ] AS relationship_paths
+           LIMIT 100
+    """
+
+    result = await neo4j_session.run(
+        query,
+        table_name=table_name
+    )
+    records = await result.data()
+
+    relationships: List[Dict] = []
+    for record in records:
+        rel_info: Dict = {
+            "related_table": record["related_table"],
+            "related_table_schema": record.get("related_table_schema"),
+            "relationship_paths": record.get("relationship_paths") or [],
+        }
+        if record.get("related_table_description"):
+            rel_info["related_table_description"] = record["related_table_description"]
+        relationships.append(rel_info)
+
+    return relationships
+
+
+async def get_table_relationship_details(
+    neo4j_session: AsyncSession,
+    table_name: str,
+    relation_limit: int,
+) -> Dict[str, List[Dict]]:
+    """특정 테이블과 연관된 FK 및 기타 관계 정보를 묶어서 반환한다."""
+    if relation_limit <= 0:
+        return {"fk_relationships": [], "additional_relationships": []}
+
+    fk_relationships = await get_table_fk_relationships(
+        neo4j_session,
+        table_name,
+        limit=relation_limit,
+    )
+    fk_related_tables: Set[str] = {
+        rel["related_table"] for rel in fk_relationships if rel.get("related_table")
+    }
+
+    remaining_relationship_slots = max(relation_limit - len(fk_relationships), 0)
+    additional_relationships: List[Dict[str, Any]] = []
+
+    if remaining_relationship_slots:
+        fallback_candidates = await get_table_any_relationships(
+            neo4j_session,
+            table_name,
+        )
+        scored_candidates: List[Dict[str, Any]] = []
+        for candidate in fallback_candidates:
+            candidate_name = candidate.get("related_table")
+            relationship_paths = candidate.get("relationship_paths") or []
+            if (
+                not candidate_name
+                or candidate_name in fk_related_tables
+                or not relationship_paths
+            ):
+                continue
+
+            score = 0
+            relationship_type_labels: List[str] = []
+            seen_type_labels: Set[str] = set()
+            for path in relationship_paths:
+                score += RELATIONSHIP_RANKS.get(path, DEFAULT_RELATIONSHIP_SCORE)
+                type_label = RELATIONSHIP_TYPE_MAP.get(path)
+                if type_label and type_label not in seen_type_labels:
+                    seen_type_labels.add(type_label)
+                    relationship_type_labels.append(type_label)
+
+            scored_candidates.append(
+                {
+                    "related_table": candidate_name,
+                    "related_table_schema": candidate.get("related_table_schema"),
+                    "related_table_description": candidate.get("related_table_description"),
+                    "relationship_type": ", ".join(relationship_type_labels)
+                    if relationship_type_labels
+                    else None,
+                    "score": score,
+                }
+            )
+
+        scored_candidates.sort(
+            key=lambda item: (-item["score"], item["related_table"])
+        )
+        additional_relationships = scored_candidates[:remaining_relationship_slots]
+
+    return {
+        "fk_relationships": fk_relationships,
+        "additional_relationships": additional_relationships,
+    }
 
 
 async def get_column_fk_relationships(

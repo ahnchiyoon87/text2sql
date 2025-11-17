@@ -18,8 +18,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.config import settings
+from app.react.enrich_react_medata import (
+    auto_enrich_tables_from_reasoning
+)
 from app.react.state import ReactMetadata, ReactSessionState, MetadataParseError
 from app.react.tools import ToolContext, ToolExecutionError, execute_tool
+from app.react.utils import XmlUtil
 
 
 class ReactAgentError(Exception):
@@ -74,9 +78,10 @@ class ReactAgent:
     def __init__(self, prompt_path: Path):
         self.prompt_text = prompt_path.read_text(encoding="utf-8")
         self.llm = ChatOpenAI(
-            model=settings.openai_llm_model,
+            model=settings.react_openai_llm_model,
             temperature=0,
             api_key=settings.openai_api_key,
+            reasoning_effort="medium"
         )
 
     async def run(
@@ -119,8 +124,14 @@ class ReactAgent:
                 state.metadata.update_from_xml(parsed_step.metadata_xml)
             except MetadataParseError as exc:
                 raise ReactAgentError(str(exc)) from exc
+            auto_enrich_tables_from_reasoning(parsed_step.reasoning, state)
 
             state.partial_sql = parsed_step.partial_sql or state.partial_sql
+            state.add_previous_reasoning(
+                step=parsed_step.iteration,
+                reasoning=parsed_step.reasoning,
+                limit=settings.previous_reasoning_limit_steps,
+            )
 
             # Defer tool result assignment; handle by tool execution
             step = parsed_step
@@ -234,13 +245,32 @@ class ReactAgent:
                     await task
 
     def _build_input_xml(self, state: ReactSessionState) -> str:
+        user_query = state.user_query
+        if settings.is_add_mocked_db_caution:
+            user_query = f"""{user_query}
+
+(Important Caution: The database currently in use is a mocked DB with limited data.
+- If a tool call fails or returns empty results, it means the data does NOT exist in this mocked environment.
+- DO NOT retry the same failed tool call with the same parameters. It will fail again.
+- DO NOT assume failures are transient errors. They are permanent limitations of the mocked DB.
+- Instead, try alternative approaches: search for different tables, use different keywords, or work with the data you already have.)"""
+
         parts = ["<input>"]
-        parts.append(f"<user_query><![CDATA[{state.user_query}]]></user_query>")
+        parts.append(f"<user_query><![CDATA[{user_query}]]></user_query>")
         parts.append(f"<dbms>{state.dbms}</dbms>")
         parts.append(f"<remaining_tool_calls>{state.remaining_tool_calls}</remaining_tool_calls>")
         parts.append("<current_tool_result>")
         parts.append(state.current_tool_result or "<tool_result/>")
         parts.append("</current_tool_result>")
+        parts.append("<previous_reasonings>")
+        for entry in state.previous_reasonings:
+            step_value = entry.get("step", "")
+            step_attr = str(step_value) if step_value is not None else ""
+            reasoning_text = entry.get("reasoning", "")
+            parts.append(
+                f'<previous_reasoning previous_step="{step_attr}"><![CDATA[{reasoning_text}]]></previous_reasoning>'
+            )
+        parts.append("</previous_reasonings>")
         parts.append(state.metadata.to_xml())
         parts.append(f"<partial_sql><![CDATA[{state.partial_sql}]]></partial_sql>")
         parts.append("</input>")
@@ -270,6 +300,7 @@ class ReactAgent:
         if start_idx > 0:
             cleaned = cleaned[start_idx:]
 
+        cleaned = XmlUtil.sanitize_xml_text(cleaned)
         root = self._parse_xml_with_recovery(cleaned, response_text)
 
         reasoning = (root.findtext("reasoning") or "").strip()
@@ -333,11 +364,13 @@ class ReactAgent:
 
         if tool_name == "search_column_values":
             table_name = (parameters_el.findtext("table") or "").strip()
+            schema_name = (parameters_el.findtext("schema") or "").strip()
             column_name = (parameters_el.findtext("column") or "").strip()
             keywords_text = (parameters_el.findtext("search_keywords") or "").strip()
             keywords = self._parse_list_literal(keywords_text)
             return {
                 "table": table_name,
+                "schema": schema_name,
                 "column": column_name,
                 "search_keywords": keywords,
             }
@@ -365,6 +398,7 @@ class ReactAgent:
             pass
         return [literal_text]
 
+
     def _parse_xml_with_recovery(self, xml_text: str, raw_response: str) -> ET.Element:
         try:
             return ET.fromstring(xml_text)
@@ -376,5 +410,3 @@ class ReactAgent:
                 raise LLMResponseFormatError(
                     f"Invalid XML from LLM: {exc}\nRaw: {raw_response}"
                 ) from exc
-
-

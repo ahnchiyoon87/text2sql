@@ -7,7 +7,9 @@ def pytest_configure(config):
 def pytest_collection_modifyitems(items):
     """테스트 실행 순서를 커스터마이징"""
     priority_order = [
-        'tests\\datas\\'
+        'tests\\utils\\',
+        'tests\\models\\',
+        'tests\\cores\\'
     ]
     
     def get_priority(item):

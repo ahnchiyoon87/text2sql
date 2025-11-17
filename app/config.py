@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
     openai_embedding_model: str = "text-embedding-3-small"
-    openai_llm_model: str = "gpt-4o-mini"
+    openai_llm_model: str = "gpt-4.1-2025-04-14"
     is_use_llm_cache: bool = False
     llm_cache_path: str = ".cache/llm_cache.db"
     
@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     sql_timeout_seconds: int = 30
     sql_row_limit: int = 1000
     sql_max_rows: int = 100000
-    max_join_depth: int = 3
-    max_subquery_depth: int = 3
+    max_join_depth: int = 10
+    max_subquery_depth: int = 10
     
     # RAG
     vector_top_k: int = 10
@@ -54,8 +54,11 @@ class Settings(BaseSettings):
     langsmith_api_key: str = ""
 
     # ReAct
+    react_openai_llm_model: str = "gpt-5.1-2025-11-13"
     is_add_delay_after_react_generator: bool = False
-    delay_after_react_generator_seconds: int = 3
+    delay_after_react_generator_seconds: int = 5
+    previous_reasoning_limit_steps: int = 15
+    is_add_mocked_db_caution: bool = False
     
     class Config:
         env_file = ".env"

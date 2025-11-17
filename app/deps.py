@@ -13,7 +13,7 @@ from app.config import settings
 
 def init_cache():
     if not os.path.exists(settings.llm_cache_path):
-        os.makedirs(os.path.dirname(settings.llm_cache_path))
+        os.makedirs(os.path.dirname(settings.llm_cache_path), exist_ok=True)
 
     set_llm_cache(SQLiteCache(database_path=settings.llm_cache_path))
 
